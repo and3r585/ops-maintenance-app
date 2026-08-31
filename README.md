@@ -1,4 +1,4 @@
-# Operations & Maintenance app
+# Site Portal
 
 Role-based operations / maintenance tool with task planning and asset tracking.
 Runs on **Python 3 standard library only** — no `pip install`, no Node, no internet.
@@ -53,18 +53,18 @@ Usernames are first-initial + surname, lowercase (`sclydesdale`, `scant`, `jgang
   placeholder slots and a "needs 2" flag until at least two technicians are dropped in.
   Dragging a chip/task back to the rail (or its × button) frees it. The plan is saved per
   date; an unavailable technician is refused.
-- **Asset detail** — tabs for **Details**, **Service dates**, **Retrofits**, **Components**,
-  **History** and **Pendings**.
+- **Asset detail** — tabs for **Details**, **Service dates**, **HV history**, **Stat history**,
+  **Retrofits**, **Components**, **History** and **Pendings**.
   - *Details* — **Equipment** card (from the **Equipment info** workbook); a **Next service
     due** card (108-month completion + 6 months, with a days-away / overdue indicator); and a
     **Condition monitoring (SMP)** box with gearbox / generator / main-bearing state and
     observations, from the *KGH SMP Action Tracker* tab.
   - *Service dates* — the seven major/minor service completion dates (72/84/90/96/102/108/114
-    month), from the completion-date columns of the *KGH 2025* tab.
+    month), from `KGH 2025.csv`.
   - *HV history* — HV maintenance completion dates (2023 campaign, 2024/25 rephasing,
-    2025/26), from the *HV* tab.
+    2025/26), from `HV.csv`.
   - *Stat history* — annual and semi-annual statutory inspections plus the 10-year lift
-    inspection, from the *Stats* tab.
+    inspection, from `Stats.csv`.
   - *Retrofits* — every retrofit campaign with its status: completed (with date), in
     progress, or outstanding, from the *25 KGH Retro* tab (N/A rows omitted). Includes the
     transformer wall upgrade (moved here from the HV tab).
@@ -78,32 +78,38 @@ Usernames are first-initial + surname, lowercase (`sclydesdale`, `scant`, `jgang
   - *Pendings* — any user can add an entry (note + up to 8 photos, camera on mobile);
     admins mark entries Submitted → Reviewed → Actioned.
 
-All workbook data is pre-extracted into the `*.json` files below and loaded on first run —
-the workbooks are not needed at runtime. Re-run `python3 app.py --reset` after changing them.
-- **Planning board (admin)** — outstanding jobs are pulled into a backlog column; drag a job
-  onto a technician to schedule it, drag it back to unassign. Every move is persisted and logged.
+## Data
+
+All content is seeded from **CSV exports of the source spreadsheets**, one file per tab, in
+`source/`. `seed_data.py` parses them on first run (`--reset` to re-seed after editing a CSV);
+nothing is needed at runtime once the DB is built.
+
+| `source/` file | feeds |
+|---|---|
+| `KGH 2025.csv` | turbine list + service completion dates (72–114 month) |
+| `HV.csv` | HV maintenance history |
+| `Stats.csv` | statutory inspection history |
+| `25 KGH Retro.csv` | retrofit status (complete / in progress / outstanding) |
+| `Kilgallioch App data.csv` | component serial numbers (blade-bearing cells are `#REF!` in the export) |
+| `Equipment info.csv` | make / model / family / serial / dates |
+| `KGH SMP Action Tracker.csv` | gearbox / generator / main-bearing state + observations |
+| `Manplan 2025.csv` | technicians + the day-by-day availability roster |
+| `Job Request.csv` | per-turbine work-order log (SCOTT & STUART 2026) |
 
 ## Extending it later
 
 Navigation is driven by the `modules` table (see `SCHEMA` in `app.py`). Add a row
 (`key`, `name`, `min_role`, `sort`), add matching API routes in `_route_api`, and a view
-in `web/app.js`. The two current modules (`assets`, `planning`) follow that pattern.
+in `web/app.js`.
 
 ## Layout
 
 ```
-app.py            server + schema + seed data (stdlib only)
-kgh_components.json  per-turbine component serial numbers (Kilgallioch App data)
-equipment_info.json  per-turbine make/model/serial/dates (Equipment info)
-history_2026.json    per-turbine work-order log (Job Request, SCOTT & STUART 2026)
-roster.json          technician unavailable-days by date (Manplan 2025)
-kgh_services.json    per-turbine service completion dates (KGH 2025 tab)
-kgh_retrofits.json   per-turbine retrofit status: complete / in progress / outstanding
-hv_history.json      per-turbine HV maintenance completion dates (HV tab)
-stat_history.json    per-turbine statutory inspection completion dates (Stats tab)
-smp_tracker.json     per-turbine gearbox/generator/main-bearing state + observations
+app.py            server + schema + seed orchestration (stdlib only)
+seed_data.py      CSV parsers -> structures the seeder consumes
+source/*.csv      one CSV per source-spreadsheet tab
 web/index.html    SPA shell
-web/app.js        views, router, drag-and-drop planning board
+web/app.js        views, router, planning board
 web/styles.css    Claude-inspired theme (light + dark, follows OS, manual toggle ◐)
 data/             created at runtime — SQLite db + uploaded photos
 ```

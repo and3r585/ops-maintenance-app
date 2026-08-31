@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Role-based Operations & Maintenance app.
+Role-based Site Portal app.
 Single-file server: Python standard library only (no pip installs, no network).
 
   python3 app.py            # serves http://localhost:8000
@@ -25,6 +25,8 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+
+import seed_data
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
@@ -212,31 +214,13 @@ def seed():
     conn = get_db()
     conn.executescript(SCHEMA)
 
-    # Technicians: column E, rows 14-37 of the "Manplan 2025" tab
-    # of the KGH Virtual Whiteboard workbook.
-    MANPLAN_TECHS = [
-        "Scott Clydesdale", "Stuart Cant", "Jason Gange", "Ryan Frew", "John Phillips",
-        "John McCartney", "Stephen Loughran", "Johnathon Young", "William McMillan",
-        "Lewis Kerr", "Adam Patterson", "Dennis Hendren", "Billy Mullen", "Martin Glover",
-        "Joe Zonfrillo", "Scott McCathie", "Scott Lennox", "Jim Hunter", "Thomas Dempsie",
-        "Lewis Clark", "Lewis Madden", "Brandon Simpson", "Euan Plunkett", "Jamie Mackenzie",
-    ]
+    data = seed_data.load()
 
-    def make_username(full, taken):
-        parts = "".join(ch for ch in full.lower() if ch.isalpha() or ch.isspace()).split()
-        base = (parts[0][0] + parts[-1]) if len(parts) > 1 else parts[0]
-        uname, i = base, 1
-        while uname in taken:
-            i += 1
-            uname = "%s%d" % (base, i)
-        taken.add(uname)
-        return uname
-
+    # --- users: admin + the technicians from Manplan 2025.csv (col E, rows 14-37) ---
     if conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"] == 0:
-        taken = set()
         rows = [("admin", "admin123", "ADMIN", "Alex Reid")]
-        for name in MANPLAN_TECHS:
-            rows.append((make_username(name, taken), "tech123", "TECHNICIAN", name))
+        for t in data["technicians"]:
+            rows.append((t["username"], "tech123", "TECHNICIAN", t["name"]))
         for username, pw, role, name in rows:
             ph, salt = hash_password(pw)
             conn.execute(
@@ -245,72 +229,45 @@ def seed():
                 (username, ph, salt, role, name, now()),
             )
 
-    # Turbine names taken from the "TURBINE" column of the KGH 2025 tab
-    # of the KGH Virtual Whiteboard workbook.
-    TURBINES = [
-        "F52", "G59", "J87", "I85", "D29", "B16", "I81", "J92", "B15", "J89",
-        "E43", "I84", "J91", "G65", "A02", "E39", "A01", "A07", "D27", "I82",
-        "A09", "H73", "F48", "A05", "J96", "G62", "H67", "C26", "D34", "G57",
-        "A04", "B17", "F53", "G63", "H76", "I80", "C22", "A03", "A08", "D30",
-        "A06", "C20", "D35", "G61", "H75", "J95", "G60", "H69", "B12", "B13",
-        "E44", "F49", "F55", "E40", "E45", "G64", "D32", "D33", "B11", "D31",
-        "B18", "J90", "C19", "D36", "E38", "E42", "E46", "I79", "I77", "B14",
-        "H68", "H72", "I78", "I86", "G66", "F47", "D28", "H71", "C25", "F56",
-        "J94", "J93", "E37", "E41", "H70", "G58", "F51", "F54", "H74", "A10",
-        "C23", "J88", "C21", "I83", "F50", "C24",
-    ]
-
+    # --- assets: one per turbine in KGH 2025.csv ---
     if conn.execute("SELECT COUNT(*) c FROM assets").fetchone()["c"] == 0:
-        for tid in TURBINES:
+        for tid in data["turbines"]:
             conn.execute(
                 "INSERT INTO assets (tag,name,type,location,created_at) VALUES (?,?,?,?,?)",
                 (tid, tid, "Wind Turbine", "Array " + tid[0], now()),
             )
 
-    # Equipment details, from the "Equipment info" workbook.
+    # --- equipment: Equipment info.csv ---
     if conn.execute(
         "SELECT COUNT(*) c FROM assets WHERE manufacturer IS NOT NULL"
     ).fetchone()["c"] == 0:
-        eq_path = os.path.join(BASE_DIR, "equipment_info.json")
-        if os.path.exists(eq_path):
-            with open(eq_path, encoding="utf-8") as fh:
-                equip = json.load(fh)
-            for tag, e in equip.items():
-                conn.execute(
-                    "UPDATE assets SET manufacturer=?, model=?, family=?, serial=?, "
-                    "install_date=?, toc=?, warranty_expiry=? WHERE tag=?",
-                    (e.get("manufacturer"), e.get("model"), e.get("family"), e.get("serial"),
-                     e.get("install_date"), e.get("toc"), e.get("warranty_expiry"), tag),
-                )
+        for tag, e in data["equipment"].items():
+            conn.execute(
+                "UPDATE assets SET manufacturer=?, model=?, family=?, serial=?, "
+                "install_date=?, toc=?, warranty_expiry=? WHERE tag=?",
+                (e["manufacturer"], e["model"], e["family"], e["serial"],
+                 e["install_date"], e["toc"], e["warranty_expiry"], tag),
+            )
 
-    # Condition-monitoring snapshot, from the KGH SMP Action Tracker tab.
+    # --- condition monitoring: KGH SMP Action Tracker.csv ---
     if conn.execute("SELECT COUNT(*) c FROM assets WHERE smp_gearbox IS NOT NULL").fetchone()["c"] == 0:
-        smp_path = os.path.join(BASE_DIR, "smp_tracker.json")
-        if os.path.exists(smp_path):
-            with open(smp_path, encoding="utf-8") as fh:
-                smp = json.load(fh)
-            for tag, s in smp.items():
-                conn.execute(
-                    "UPDATE assets SET smp_data_date=?, smp_gearbox=?, smp_generator=?, "
-                    "smp_main_bearing=?, smp_observations=? WHERE tag=?",
-                    (s.get("data_date"), s.get("gearbox"), s.get("generator"),
-                     s.get("main_bearing"), s.get("observations"), tag),
-                )
+        for tag, s in data["smp"].items():
+            conn.execute(
+                "UPDATE assets SET smp_data_date=?, smp_gearbox=?, smp_generator=?, "
+                "smp_main_bearing=?, smp_observations=? WHERE tag=?",
+                (s["data_date"], s["gearbox"], s["generator"],
+                 s["main_bearing"], s["observations"], tag),
+            )
 
-    # Service / retrofit / HV / stat history from the KGH Virtual Whiteboard workbook.
+    # --- service / HV / stat / retrofit / component records ---
     if conn.execute("SELECT COUNT(*) c FROM asset_records").fetchone()["c"] == 0:
         aid = {r["tag"]: r["id"] for r in conn.execute("SELECT id,tag FROM assets")}
 
-        def load_records(fname, key, category, with_status=False):
-            path = os.path.join(BASE_DIR, fname)
-            if not os.path.exists(path):
-                return
-            with open(path, encoding="utf-8") as fh:
-                data = json.load(fh)
-            for tag, blocks in data.items():
+        def add_records(by_tag, category, with_status=False):
+            for tag, recs in by_tag.items():
                 if tag not in aid:
                     continue
-                for rec in blocks.get(key, []):
+                for rec in recs:
                     if with_status:
                         conn.execute(
                             "INSERT INTO asset_records (asset_id,category,name,occurred_on,detail,status,sort) "
@@ -326,45 +283,37 @@ def seed():
                              rec.get("detail"), rec.get("sort", 0)),
                         )
 
-        load_records("kgh_services.json", "services", "service")
-        load_records("hv_history.json", "hv", "hv")
-        load_records("stat_history.json", "stat", "stat")
-        load_records("kgh_retrofits.json", "retrofits", "retrofit", with_status=True)
-        load_records("kgh_components.json", "components", "component")
+        add_records(data["services"], "service")
+        add_records(data["hv"], "hv")
+        add_records(data["stat"], "stat")
+        add_records(data["retrofits"], "retrofit", with_status=True)
+        add_records(data["components"], "component")
 
-    # Technician roster (unavailable days): Manplan 2025 tab.
+    # --- technician roster (unavailable days): Manplan 2025.csv ---
     if conn.execute("SELECT COUNT(*) c FROM roster").fetchone()["c"] == 0:
-        roster_path = os.path.join(BASE_DIR, "roster.json")
-        if os.path.exists(roster_path):
-            uid = {r["username"]: r["id"] for r in conn.execute("SELECT id,username FROM users")}
-            with open(roster_path, encoding="utf-8") as fh:
-                roster = json.load(fh)
-            for on_date, people in roster.items():
-                for username, code in people.items():
-                    if username in uid:
-                        conn.execute(
-                            "INSERT OR IGNORE INTO roster (user_id,on_date,code) VALUES (?,?,?)",
-                            (uid[username], on_date, code),
-                        )
-
-    # Work-order history: Job Request workbook, "SCOTT & STUART 2026" tab.
-    if conn.execute("SELECT COUNT(*) c FROM asset_history").fetchone()["c"] == 0:
-        hist_path = os.path.join(BASE_DIR, "history_2026.json")
-        if os.path.exists(hist_path):
-            aid = {r["tag"]: r["id"] for r in conn.execute("SELECT id,tag FROM assets")}
-            with open(hist_path, encoding="utf-8") as fh:
-                hist = json.load(fh)
-            for tag, entries in hist.items():
-                if tag not in aid:
-                    continue
-                for e in entries:
+        uid = {r["username"]: r["id"] for r in conn.execute("SELECT id,username FROM users")}
+        for on_date, people in data["roster"].items():
+            for username, code in people.items():
+                if username in uid:
                     conn.execute(
-                        "INSERT INTO asset_history "
-                        "(asset_id,occurred_on,description,work_type,service_order,technicians) "
-                        "VALUES (?,?,?,?,?,?)",
-                        (aid[tag], e.get("date"), e.get("description") or "Work order",
-                         e.get("work_type"), e.get("service_order"), e.get("technicians")),
+                        "INSERT OR IGNORE INTO roster (user_id,on_date,code) VALUES (?,?,?)",
+                        (uid[username], on_date, code),
                     )
+
+    # --- work-order history: Job Request.csv ---
+    if conn.execute("SELECT COUNT(*) c FROM asset_history").fetchone()["c"] == 0:
+        aid = {r["tag"]: r["id"] for r in conn.execute("SELECT id,tag FROM assets")}
+        for tag, entries in data["history"].items():
+            if tag not in aid:
+                continue
+            for e in entries:
+                conn.execute(
+                    "INSERT INTO asset_history "
+                    "(asset_id,occurred_on,description,work_type,service_order,technicians) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (aid[tag], e.get("date"), e.get("description") or "Work order",
+                     e.get("work_type"), e.get("service_order"), e.get("technicians")),
+                )
 
     if conn.execute("SELECT COUNT(*) c FROM jobs").fetchone()["c"] == 0:
         # (title, turbine, priority, status, est_min, due_date, assignee_username, scheduled_date)
@@ -1050,7 +999,7 @@ def main():
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     url = "http://%s:%d" % ("localhost" if args.host in ("127.0.0.1", "0.0.0.0") else args.host, args.port)
-    print("\n  Operations & Maintenance app")
+    print("\n  Site Portal")
     print("  " + "-" * 40)
     print("  running at   %s" % url)
     print("  admin login  admin / admin123")

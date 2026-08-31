@@ -1,0 +1,158 @@
+﻿,,,,, Recommended Actions,,,,,,,,,,,,,
+WT ID,WT Model,Gearbox,Generator,Last Data Date,State Gearbox,State Generator,State Main Bearing,Actions Gearbox,Site Update (GBX),Actions Generator,Site Update (Gen),Actions Main Bearing,Site Update (MB),Observations,Scheduled Date,SPR WO Number,Real Date,ATS Case Link
+A01,G114,GAMESA,CANTAREY,7/1/2025,Monitoring,Normal,Normal,Check sensors and their cable routing.,,,,,,"No data from sensor 2 . Check its presence, connection and LED of the channel 2.",,303921174,,
+A02,G114,GAMESA,CANTAREY,7/3/2025,Normal,Normal,Normal,,,,,,,,,,,
+A03,G114,GAMESA,CANTAREY,7/1/2025,Monitoring,Normal,Normal,,,,,,,,,,,
+A04,G114,GAMESA,CANTAREY,6/28/2025,Normal,Monitoring,Normal,,,Check sensors and their cable routing.,DE Gen bearing replaced Dec 25,,,"Generator bearing state to be followed up
+No data from sensor 8. Check its presence, connection and LED of the channel 8.",,303921172,,
+A05,G114,GAMESA,CANTAREY,6/28/2025,Monitoring,Normal,Monitoring,Upload SMP data.,,,,,,"23/10/25 COnnection fixed with SMP
+Drive train state to be followed up.",,,,
+A06,G114,GAMESA,CANTAREY,6/24/2025,Normal,Normal,Monitoring,,,,,,,,,,,
+A07,G114,GAMESA,CANTAREY,6/28/2025,Normal,Normal,Normal,,"Metal flakes/particles found on magent 4/11/25
+Gearbox magnet checked again- Found to be OK",,,,,,,,,https://dojo.siemensgamesa.com/ats/case/15743189
+A08,G114,GAMESA,CANTAREY,6/29/2025,Normal,Normal,Normal,,,,"Requires Gen bearing 
+Sensor 8 cable ordered ",,,,,,,
+A09,G114,GAMESA,CANTAREY,7/1/2025,Monitoring,Normal,Normal,Check sensors and their cable routing.,,,,,,Check sensor 5 ground connection.,,,,
+A10,G114,GAMESA,CANTAREY,6/28/2025,Monitoring,Normal,Monitoring,,,,,,,Drive train state to be followed up.,,,,
+B11,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,Upload SMP data.,,,,,,,,,,
+B12,G114,GAMESA,CANTAREY,7/3/2025,Normal,Normal,No SMP data,Check sensors and their cable routing.,,,,Check sensors and their cable routing.,,"Low reliability diagnosis.
+No data from sensor 1. Check its presence, connection and LED of the channel 1.
+No data from sensor 2 . Check its presence, connection and LED of the channel 2.
+No data from sensor 4. Check its presence, connection, and LED of channel 4.",,,,
+B13,G114,GAMESA,CANTAREY,7/3/2025,Monitoring,Normal,Monitoring,,,,,,,Drive train state to be followed up.,,,,
+B14,G114,GAMESA,CANTAREY,6/24/2025,Normal,Normal,Normal,Upload SMP data.,,,,,,,,,,
+B15,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,,,,,,,,,,,
+B16,G114,GAMESA,CANTAREY,6/10/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,,,,,"Low reliability diagnosis for low speed components
+No data from sensor 2 . Check its presence, connection and LED of the channel 2.",,303858217,,
+B17,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,,,,,,,,,,,
+B18,G114,GAMESA,CANTAREY,7/3/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,,,,,"Check sensor 4 fixing. Use Loctite 242  (ref.149773) in the screw between the metallic chock and the accelerometer.
+Check Sensor 5 fixing.
+Low reliability diagnosis for low speed components
+No data from sensor 2 . Check its presence, connection and LED of the channel 2.
+Sensor 4 must be 100mv/g check it.
+Sensor 5 must be 100mv/g check it.",,,,
+C19,G114,GAMESA,CANTAREY,7/2/2025,Normal,Normal,Normal,,,,,,,,,,,
+C20,G114,GAMESA,CANTAREY,7/1/2025,Monitoring,Normal,Monitoring,,,,,,,Drive train state to be followed up.,,,,
+C21,G9x,GAMESA,CANTAREY,6/29/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,,,,,"Low reliability diagnosis.
+Sensor 2 data unreliable, check sensor mounting.  Reapply adhesive if necessary.",,,,
+C22,G114,GAMESA,CANTAREY,6/29/2025,Normal,Normal,Normal,"Check sensors and their cable routing.
+Upload SMP data.",,,,Check sensors and their cable routing.,,Sensor 1 and 5 swapped.,,,,
+C23,G9x,GAMESA,CANTAREY,6/29/2025,Normal,Normal,Normal,Check model type sensors and cable connections.,,,,,,"Sensor 3 must be 500mv/g, check it.",,,,
+C24,G114,GAMESA,CANTAREY,6/23/2025,Normal,Normal,Normal,,,,,,,,,,,
+C25,G114,GAMESA,CANTAREY,6/29/2025,Normal,Normal,Normal,,,,,,,,,,,
+C26,G114,GAMESA,CANTAREY,7/3/2025,Normal,Normal,Normal,,,,,,,,,,,
+D27,G114,GAMESA,CANTAREY,6/28/2025,Normal,Normal,Normal,,,,,,,,,,,
+D28,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Action - High,,,,,Main shaft rear bearing inspection.,Requires Main Shaft ,Outer race rear main bearing damage.,,,,https://dojo.siemensgamesa.com/ats/case/15201963
+D29,G114,GAMESA,CANTAREY,7/1/2025,Normal,Monitoring,Normal,Check sensors and their cable routing.,,Upload SMP data.,,,,"Generator bearing state to be followed up
+No data from sensor 4. Check its presence, connection, and LED of channel 4.",,,,
+D30,G114,GAMESA,CANTAREY,6/30/2025,Normal,Normal,Normal,"Check model type sensors and cable connections.
+Check sensors and their cable routing.",,,,,,"Low reliability diagnosis.
+No data from sensor 2 . Check its presence, connection and LED of the channel 2.
+No data from sensor 4. Check its presence, connection, and LED of channel 4.
+Sensor 5 must be 100mv/g check it.",,,,
+D31,G114,GAMESA,CANTAREY,7/3/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,Check sensors and their cable routing.,,,,"Low reliability diagnosis.
+Check sensor 6 (sensor, cable, fixing, connectors).
+Check sensor 5 (sensor, cable, fixing, connectors).",,303921182,,
+D32,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,,,,,"No data from sensor 5. Check its presence, connection and LED of channel 5.",,,,
+D33,G114,GAMESA,CANTAREY,6/30/2025,Monitoring,Normal,Normal,,"6/4/26 Swarf found on rod, pump  jammed",,,,,Gearbox state to be followed up.,,,,https://dojo.siemensgamesa.com/ats/case/16910273
+D34,G114,GAMESA,CANTAREY,7/3/2025,Normal,Normal,Normal,,,,,,,,,,,
+D35,G114,GAMESA,CANTAREY,6/30/2025,Normal,Normal,Normal,,,,,,,,,,,
+D36,G114,GAMESA,CANTAREY,7/3/2025,Normal,Normal,No SMP data,,,Check sensors and their cable routing.,,Check sensors and their cable routing.,,"Low reliability diagnosis.
+No data from sensor 1. Check its presence, connection and LED of the channel 1.
+No data from sensor 6. Check its presence connection and LED of the channel 6.",,303921181,,
+E37,G114,GAMESA,CANTAREY,7/1/2025,Monitoring,Normal,Normal,,,,,,,Mechanical pump vibration to be followed.,,,,
+E38,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,,,,,,,,,,,
+E39,G114,GAMESA,CANTAREY,3/29/2025,Normal,Normal,Normal,," Swarf on rod Oct 25. Full inspection 7/11/25. Recheck rod in 1 month 
+2nd inspection carried out week 14/26",,,,,No communication- Replaced SMP Controller 22/10/25,,,,https://dojo.siemensgamesa.com/ats/case/15683376
+E40,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,No SMP data,Check sensors and their cable routing.,,,,Check sensors and their cable routing.,,"Low reliability diagnosis.
+No data from sensor 1. Check its presence, connection and LED of the channel 1.
+Check sensor 5 (sensor, cable, fixing, connectors).",,303921178,,
+E41,G114,GAMESA,CANTAREY,7/3/2025,Normal,Normal,Normal,,,,,,,,,,,
+E42,G114,GAMESA,CANTAREY,6/29/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,,,,,"No data from sensor 4. Check its presence, connection, and LED of channel 4.",,,,
+E43,G114,GAMESA,CANTAREY,6/26/2025,Damaged,Normal,Normal,Replace gearbox.,Gearbox replaced Oct 25,,,,,"LSS keyway damaged.
+Operational status to be reviewed. Critical damages.",,,,https://dojo.siemensgamesa.com/ats/case/13031523
+E44,G114,GAMESA,CANTAREY,6/28/2025,Normal,Action - High,Normal,,,Replace generator DE bearing.,Replaced Oct 25,,,Generator DE bearing damaged.,,,,https://dojo.siemensgamesa.com/ats/case/15138521
+E45,G114,GAMESA,CANTAREY,7/2/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,,,,,"Low reliability diagnosis.
+No data from sensor 2 . Check its presence, connection and LED of the channel 2.
+No data from sensor 4. Check its presence, connection, and LED of channel 4.
+Possible channels 2 and 4 damaged.",,,,
+E46,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,,,,,,,,,,,
+F47,G114,GAMESA,CANTAREY,6/24/2025,Damaged,Normal,Normal,Replace gearbox.,Gearbox replaced Oct 25,Check sensors and their cable routing.,,,,"LSS keyway damaged.
+Check sensor 6 (sensor, cable, fixing, connectors).",,,,https://dojo.siemensgamesa.com/ats/case/13764298
+F48,G114,GAMESA,CANTAREY,6/28/2025,Normal,Normal,Normal,,,,,,,,,303921187,,
+F49,G114,GAMESA,CANTAREY,7/2/2025,Action - Low,Normal,Normal,,Slight swarf on Rod 01/26,,,,,Gearbox ISS (LSS) bearings to be followed up.,,,,
+F50,G114,GAMESA,CANTAREY,2/12/2018,No SMP data,No SMP data,No SMP data,"Check PLC-SMP communication. Check SMP operation.
+Upload SMP data.",,,Front and rear Generator bearings replaced oct 25,,,"SMP Replaced 24th Oct 25
+Old data. Data should be resend to verify the current state of the machine",,,,
+F51,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,,,,,"No data from sensor 5. Check its presence, connection and LED of channel 5.",,,,
+F52,G114,GAMESA,CANTAREY,6/28/2025,Normal,Normal,No SMP data,Check sensors and their cable routing.,,,,Check sensors and their cable routing.,,"Low reliability diagnosis.
+No data from sensor 1. Check its presence, connection and LED of the channel 1.
+No data from sensor 4. Check its presence, connection, and LED of channel 4.",,,,
+F53,G114,GAMESA,CANTAREY,6/30/2025,Normal,Normal,Normal,,,,,,,,,,,
+F54,G114,GAMESA,CANTAREY,6/28/2025,Normal,Normal,Normal,,,,,,,,,,,
+F55,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,Check sensors and their cable routing.,,,,"Check Sensor 5 fixing.
+Low reliability diagnosis.
+No data from sensor 4. Check its presence, connection, and LED of channel 4.
+No data from sensor 8. Check its presence, connection and LED of the channel 8.
+Sensor 2 data unreliable, check sensor mounting.  Reapply adhesive if necessary.",,,,
+F56,G114,GAMESA,CANTAREY,7/3/2025,Normal,Normal,Normal,,,,,,,,,,,
+G57,G114,GAMESA,CANTAREY,6/28/2025,Normal,Normal,Normal,,,,,,,,,,,
+G58,G114,GAMESA,CANTAREY,6/28/2025,Normal,Normal,Normal,,,,,,,,,,,
+G59,G114,GAMESA,CANTAREY,6/28/2025,No SMP data,Normal,Normal,Check sensors and their cable routing.,,,,,,"No data from sensor 3. Check its presence, connection and LED of the channel 3.
+No data from sensor 4. Check its presence, connection, and LED of channel 4.
+No data from sensor 5. Check its presence, connection and LED of channel 5.",,,,
+G60,G114,GAMESA,CANTAREY,6/29/2025,Action - Low,Normal,Normal,Upload SMP data.,,,,,,Gearbox state to be followed up.,,,,
+G61,G114,GAMESA,CANTAREY,6/27/2025,Normal,Normal,Normal,,,,,,,"Channel 3 damaged.
+Old data. Data should be resend to verify the current state of the machine",,,,
+G62,G114,GAMESA,CANTAREY,4/19/2025,Normal,Normal,Normal,,,,,,,Register mode firmware upgrade pending.,,303921183,,
+G63,G114,GAMESA,CANTAREY,6/30/2025,Normal,Normal,Normal,,,,,,,,,,,
+G64,G114,GAMESA,CANTAREY,6/30/2025,Monitoring,Normal,Normal,Upload SMP data.,,,,,,Mechanical pump vibration to be followed.,,,,
+G65,G114,GAMESA,CANTAREY,6/30/2025,Normal,Normal,Normal,,,,,,,,,,,
+G66,G114,GAMESA,CANTAREY,7/3/2025,Normal,Normal,Normal,,,Check sensors and their cable routing.,,,,No data from sensor 6. Check its presence connection and LED of the channel 6.,,,,
+H67,G114,GAMESA,CANTAREY,6/30/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,Check sensors and their cable routing.,,,,"Check sensor 8 fixing. Use Loctite 242  (ref.149773) in the screw between the metallic chock and the accelerometer.
+No data from sensor 2 . Check its presence, connection and LED of the channel 2.",,,,
+H68,G114,GAMESA,CANTAREY,6/30/2025,Normal,Monitoring,Normal,,,,,,,Generator DE bearing state to be followed up.,,,,
+H69,G114,GAMESA,CANTAREY,6/30/2025,Normal,Normal,Normal,,,,,,,,,,,
+H70,G114,GAMESA,CANTAREY,7/3/2025,Normal,Normal,Normal,,,,,,,Register mode firmware upgrade pending.,,,,
+H71,G114,GAMESA,CANTAREY,6/30/2025,Monitoring,Normal,Normal,,,,,,,Gearbox state to be followed up.,,,,
+H72,G114,GAMESA,CANTAREY,6/30/2025,Normal,Normal,Normal,,,,,,,,,,,
+H73,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,,,,,,,,,,,
+H74,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,Check sensors and their cable routing.,,,,"No data from sensor 3. Check its presence, connection and LED of the channel 3.
+No data from sensor 6. Check its presence connection and LED of the channel 6.",,,,
+H75,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,,,Check sensors and their cable routing.,,,,"Check sensor 6 (sensor, cable, fixing, connectors).",,,,
+H76,G114,GAMESA,CANTAREY,7/3/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,,,,,"Check sensor 5 (sensor, cable, fixing, connectors).
+No data from sensor 2 . Check its presence, connection and LED of the channel 2.",,,,
+I77,G114,GAMESA,CANTAREY,6/27/2025,Action - Low,Normal,Normal,,,,,,,"Gearbox state to be followed up.
+SMP data to be reviewed in 3 months.",,,,
+I78,G114,GAMESA,CANTAREY,2/17/2025,No SMP data,No SMP data,No SMP data,Check PLC-SMP communication. Check SMP operation.,,,,,,,,,,
+I79,G114,GAMESA,CANTAREY,1/2/2070,Normal,Normal,Normal,,,Check sensors and their cable routing.,,,,"Check sensor 6 (sensor, cable, fixing, connectors).
+Possible channel 6 damaged.",,,,
+I80,G114,GAMESA,CANTAREY,7/2/2025,Normal,Normal,Normal,,,,,,,,,,,
+I81,G114,GAMESA,CANTAREY,6/28/2025,Normal,Normal,Normal,,,,,,,,,303921185,,
+I82,G114,GAMESA,CANTAREY,6/30/2025,Normal,Normal,Normal,,,,,,,,,,,
+I83,G114,GAMESA,CANTAREY,6/26/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,,,,,"No data from sensor 5. Check its presence, connection and LED of channel 5.",,,,
+I84,G114,GAMESA,CANTAREY,6/10/2025,Normal,Normal,Normal,,,,,,,,,,,
+I85,G114,GAMESA,CANTAREY,6/29/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,,,,,"No data from sensor 5. Check its presence, connection and LED of channel 5.",,,,
+I86,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,,,,,,,,,,,
+J87,G114,GAMESA,CANTAREY,7/3/2025,Normal,Normal,Normal,,,,,,,,,,,
+J88,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,,,,,,,,,,,
+J89,G114,GAMESA,CANTAREY,6/7/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,,,,,"No data from sensor 3. Check its presence, connection and LED of the channel 3.",,,,
+J90,G114,GAMESA,CANTAREY,7/3/2025,Monitoring,Normal,Normal,,,Check sensors and their cable routing.,,,,"Gearbox state to be followed up.
+No data from sensor 7. Check its presence, connection, and LED of channel 7.",,,,
+J91,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,,,,,,,,,,,
+J92,G114,GAMESA,CANTAREY,6/7/2025,Normal,Normal,Normal,,Metal particles found on gerbox rod during service. Week 41 / 25Requires Gearbox inspection. Gearbox inspected - requires Gearbox. Curtailed to 1/2 power,,,,,,,,,https://dojo.siemensgamesa.com/ats/case/15577533
+J93,G114,GAMESA,CANTAREY,7/1/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,,,,,"No data from sensor 8. Check its presence, connection and LED of the channel 8.",,,,
+J94,G114,GAMESA,CANTAREY,6/30/2025,Normal,Normal,Normal,Check sensors and their cable routing.,,,,,,"No data from sensor 2 . Check its presence, connection and LED of the channel 2.",,,,
+J95,G114,GAMESA,CANTAREY,6/28/2025,Monitoring,Normal,Normal,"Check sensors and their cable routing.
+Upload SMP data.",,,,,,"Check sensor 5 (sensor, cable, fixing, connectors).
+Gearbox state to be followed up.",,,,
+J96,G114,GAMESA,CANTAREY,8/16/2019,No SMP data,No SMP data,No SMP data,"Check PLC-SMP communication. Check SMP operation.
+Upload SMP data.",,,,,,"22/10/25 SMP Controller replaced.
+Old data. Data should be resend to verify the current state of the machine",,,,
+,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,

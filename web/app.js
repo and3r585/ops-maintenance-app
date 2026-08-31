@@ -1,5 +1,5 @@
 /* ================================================================
-   Operations & Maintenance - single page app (vanilla JS)
+   Site Portal - single page app (vanilla JS)
    ================================================================ */
 "use strict";
 
@@ -109,7 +109,7 @@ function topbar(active) {
     }, m.name));
   return h("header", { class: "topbar" },
     h("div", { class: "brand", onclick: () => navigate("#/home"), style: "cursor:pointer" },
-      h("span", { class: "spark" }), "Operations & Maintenance"),
+      h("span", { class: "spark" }), "Site Portal"),
     h("nav", {}, h("a", { href: "#/home", class: active === "home" ? "active" : "" }, "Home"), ...navItems),
     h("div", { class: "right" },
       h("button", { class: "icon-btn", title: "Toggle theme", onclick: () => { toggleTheme(); } }, "◐"),
@@ -147,7 +147,7 @@ function viewLogin() {
   const btn = h("button", { class: "btn primary", type: "submit" }, "Sign in");
   const errBox = h("div", { class: "form-error" });
   form.append(
-    h("div", { class: "brand" }, h("span", { class: "spark" }), "Operations & Maintenance"),
+    h("div", { class: "brand" }, h("span", { class: "spark" }), "Site Portal"),
     h("div", { class: "tagline" }, "Sign in to continue"),
     h("div", { class: "field" }, h("label", { for: "u" }, "Username"), u),
     h("div", { class: "field" }, h("label", { for: "p" }, "Password"), p),
