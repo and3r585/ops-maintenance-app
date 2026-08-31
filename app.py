@@ -1035,9 +1035,11 @@ def load_pendings(conn, asset_id):
 # ---------------------------------------------------------------------------
 
 def main():
+    # A hosted process (Render/Railway/Fly/…) sets $PORT and needs 0.0.0.0.
+    env_port = os.environ.get("PORT")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=8000)
-    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=int(env_port) if env_port else 8000)
+    ap.add_argument("--host", default=os.environ.get("HOST", "0.0.0.0" if env_port else "127.0.0.1"))
     ap.add_argument("--reset", action="store_true", help="wipe data and reseed")
     args = ap.parse_args()
 
