@@ -1,0 +1,13 @@
+# Runtime data — SQLite DB and uploaded photos, recreated on first run
+data/
+
+# Server log
+data_server.log
+*.log
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
