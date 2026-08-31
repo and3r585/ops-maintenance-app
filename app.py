@@ -14,7 +14,9 @@ Roles:
 """
 
 import argparse
+import csv
 import hashlib
+import io
 import json
 import mimetypes
 import os
@@ -423,6 +425,14 @@ class ApiError(Exception):
         self.message = message
 
 
+class RawResponse:
+    """Return from a route to send a non-JSON body (e.g. a CSV download)."""
+    def __init__(self, body, content_type, filename=None):
+        self.body = body if isinstance(body, bytes) else body.encode("utf-8")
+        self.content_type = content_type
+        self.filename = filename
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "OpsApp/1.0"
 
@@ -438,6 +448,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def _send_raw(self, r, status=200):
+        self.send_response(status)
+        self.send_header("Content-Type", r.content_type)
+        self.send_header("Content-Length", str(len(r.body)))
+        if r.filename:
+            self.send_header("Content-Disposition",
+                             'attachment; filename="%s"' % r.filename)
+        self.end_headers()
+        self.wfile.write(r.body)
 
     def _body(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -496,7 +516,10 @@ class Handler(BaseHTTPRequestHandler):
                 if result is None:
                     raise ApiError(404, "Not found")
                 status, obj = result
-                self._send_json(obj, status)
+                if isinstance(obj, RawResponse):
+                    self._send_raw(obj, status)
+                else:
+                    self._send_json(obj, status)
             elif path.startswith("/uploads/"):
                 self._serve_upload(path[len("/uploads/"):])
             else:
@@ -726,6 +749,32 @@ class Handler(BaseHTTPRequestHandler):
                 return self._create_pending(conn, asset_id, user)
 
         # --- pendings ---
+        if parts == ["pendings", "export"] and method == "GET":
+            self._require(conn, "ADMIN")
+            rows = conn.execute(
+                "SELECT a.tag AS turbine, p.wo_code, p.priority, p.system, p.status, "
+                "u.display_name AS logged_by, p.created_at, p.note, "
+                "(SELECT COUNT(*) FROM pending_photos ph WHERE ph.pending_entry_id = p.id) AS photos "
+                "FROM pending_entries p "
+                "JOIN assets a ON a.id = p.asset_id "
+                "JOIN users u ON u.id = p.author_id "
+                "ORDER BY a.tag, p.created_at, p.id"
+            ).fetchall()
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow(["Turbine", "WO code", "Priority", "System", "Status",
+                        "Logged by", "Date", "Note", "Photos"])
+            for r in rows:
+                w.writerow([
+                    r["turbine"], r["wo_code"] or "",
+                    r["priority"] if r["priority"] is not None else "",
+                    r["system"] or "", r["status"], r["logged_by"],
+                    (r["created_at"] or "")[:10],
+                    (r["note"] or "").replace("\r\n", "\n"), r["photos"],
+                ])
+            return 200, RawResponse(buf.getvalue(), "text/csv; charset=utf-8",
+                                    "pendings-%s.csv" % today())
+
         if len(parts) == 2 and parts[0] == "pendings" and method == "PATCH":
             self._require(conn, "ADMIN")
             data = self._json_body()

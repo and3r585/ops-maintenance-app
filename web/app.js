@@ -249,11 +249,41 @@ async function viewDashboard() {
     retroList.append(list);
   }
 
+  const exportBtn = h("button", { class: "btn sm", onclick: () => exportPendings(exportBtn) },
+    "⭳ Export pendings (CSV)");
+
   root.replaceChildren(shell("dashboard",
-    h("div", { class: "page-head" }, h("h1", {}, "Site dashboard"),
-      h("p", { class: "sub" }, "Kilgallioch — live figures across all 96 turbines.")),
+    h("div", { class: "page-head dash-head" },
+      h("div", {},
+        h("h1", {}, "Site dashboard"),
+        h("p", { class: "sub" }, "Kilgallioch — live figures across all 96 turbines.")),
+      exportBtn),
     h("div", { class: "kpi-row" }, pendCard, svcCard, retroCard),
     h("div", { class: "grid cols-2", style: "margin-top:1rem" }, svcList, retroList)));
+}
+
+async function exportPendings(btn) {
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = "Exporting…";
+  try {
+    const res = await fetch("/api/pendings/export", {
+      headers: { Authorization: "Bearer " + State.token },
+    });
+    if (!res.ok) throw new Error("Export failed (" + res.status + ")");
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") || "";
+    const m = cd.match(/filename="([^"]+)"/);
+    const name = m ? m[1] : "pendings.csv";
+    const url = URL.createObjectURL(blob);
+    const a = h("a", { href: url, download: name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast("Pendings exported");
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
 }
 
 /* ---------- assets list ---------- */

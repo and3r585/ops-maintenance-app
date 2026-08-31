@@ -481,3 +481,6 @@ textarea { resize: vertical; min-height: 90px; }
 }
 .pri-tag.p1, .pri-tag.p2 { color: var(--danger); background: rgba(191,91,91,.14); }
 .pri-tag.p3 { color: var(--warn); background: rgba(200,155,60,.16); }
+
+/* ---- dashboard header with export button ---- */
+.dash-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
