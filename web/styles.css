@@ -463,3 +463,21 @@ textarea { resize: vertical; min-height: 90px; }
 .state-badge.s-muted { color: var(--text-faint); background: var(--surface); }
 .state-obs { margin-top: .9rem; }
 .state-obs p { color: var(--text-soft); font-size: .9rem; }
+
+/* ---- defect / operational issue card ---- */
+.defect-card { border-left: 4px solid var(--border-2); }
+.defect-card.flagged { border-left-color: var(--warn); background: rgba(200,155,60,.06); }
+.defect-card.flagged p { font-weight: 550; }
+
+/* ---- imported pending metadata ---- */
+.pending-meta {
+  display: flex; flex-wrap: wrap; gap: .4rem; align-items: center;
+  margin: .1rem 0 .5rem; font-size: .78rem; color: var(--text-soft);
+}
+.pri-tag {
+  font-weight: 700; font-size: .68rem; text-transform: uppercase; letter-spacing: .03em;
+  padding: .1rem .45rem; border-radius: 999px;
+  color: var(--info); background: rgba(91,124,153,.14);
+}
+.pri-tag.p1, .pri-tag.p2 { color: var(--danger); background: rgba(191,91,91,.14); }
+.pri-tag.p3 { color: var(--warn); background: rgba(200,155,60,.16); }

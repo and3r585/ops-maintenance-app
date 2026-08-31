@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS assets (
     install_date TEXT,
     toc          TEXT,               -- Take-over certificate date
     warranty_expiry TEXT,
+    defect       TEXT,               -- KGH 2025 col G: defects/issues affecting work/operation
     -- condition-monitoring snapshot, from the KGH SMP Action Tracker tab
     smp_data_date     TEXT,
     smp_gearbox       TEXT,
@@ -131,6 +132,9 @@ CREATE TABLE IF NOT EXISTS pending_entries (
     author_id  INTEGER NOT NULL REFERENCES users(id),
     note       TEXT NOT NULL,
     status     TEXT NOT NULL DEFAULT 'SUBMITTED',
+    wo_code    TEXT,                  -- SAP/SGRE notification number (imported from Pendings)
+    priority   INTEGER,               -- SGRE priority (1 highest .. 6 lowest)
+    system     TEXT,                  -- affected turbine system
     created_at TEXT NOT NULL
 );
 
@@ -229,12 +233,13 @@ def seed():
                 (username, ph, salt, role, name, now()),
             )
 
-    # --- assets: one per turbine in KGH 2025.csv ---
+    # --- assets: one per turbine in KGH 2025.csv (+ its defect note, col G) ---
     if conn.execute("SELECT COUNT(*) c FROM assets").fetchone()["c"] == 0:
         for tid in data["turbines"]:
             conn.execute(
-                "INSERT INTO assets (tag,name,type,location,created_at) VALUES (?,?,?,?,?)",
-                (tid, tid, "Wind Turbine", "Array " + tid[0], now()),
+                "INSERT INTO assets (tag,name,type,location,defect,created_at) VALUES (?,?,?,?,?,?)",
+                (tid, tid, "Wind Turbine", "Array " + tid[0],
+                 data["defects"].get(tid), now()),
             )
 
     # --- equipment: Equipment info.csv ---
@@ -342,23 +347,20 @@ def seed():
                  uid.get(t[6]) if t[6] else None, t[7], now(), now()),
             )
 
+    # --- pending entries: imported from Pendings.csv (open SGRE/SAP notifications) ---
     if conn.execute("SELECT COUNT(*) c FROM pending_entries").fetchone()["c"] == 0:
         aid = {r["tag"]: r["id"] for r in conn.execute("SELECT id,tag FROM assets")}
-        uid = {r["username"]: r["id"] for r in conn.execute("SELECT id,username FROM users")}
-        conn.execute(
-            "INSERT INTO pending_entries (asset_id,author_id,note,status,created_at) VALUES (?,?,?,?,?)",
-            (aid["C19"], uid["sclydesdale"],
-             "Pitch angle mismatch on blade B - turbine derating in higher winds. "
-             "Pitch drive making an intermittent knock at low speed. Recommend pitch drive inspection.",
-             "SUBMITTED", now()),
-        )
-        conn.execute(
-            "INSERT INTO pending_entries (asset_id,author_id,note,status,created_at) VALUES (?,?,?,?,?)",
-            (aid["F47"], uid["scant"],
-             "Converter over-temperature trips on warm afternoons. Cooling fan bearing is noisy "
-             "and airflow feels low. Still generating but needs a fan replacement soon.",
-             "REVIEWED", now()),
-        )
+        admin_id = conn.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()["id"]
+        for p in data["pendings"]:
+            if p["tag"] not in aid:
+                continue
+            conn.execute(
+                "INSERT INTO pending_entries "
+                "(asset_id,author_id,note,status,wo_code,priority,system,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (aid[p["tag"]], admin_id, p["note"], p["status"],
+                 p["wo_code"], p["priority"], p["system"], p["created_at"] or now()),
+            )
 
     if conn.execute("SELECT COUNT(*) c FROM modules").fetchone()["c"] == 0:
         for key, name, min_role, sort in [

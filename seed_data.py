@@ -1,6 +1,6 @@
 """
 Parse the source CSV exports (one per whiteboard tab) into the structures the
-app seeds from. One CSV per Excel tab lives in ``source/``.
+app seeds from. One CSV per source spreadsheet lives in ``source/``.
 
 Call ``load()`` to get a dict with everything the seeder needs. Standard library only.
 """
@@ -13,15 +13,16 @@ import re
 SOURCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "source")
 
 FILES = {
-    "kgh2025": "KGH 2025.csv",
-    "retro": "25 KGH Retro.csv",
+    "kgh2025": "KGH_2025.csv",
+    "retro": "25_KGH_Retro.csv",
     "hv": "HV.csv",
     "stats": "Stats.csv",
-    "smp": "KGH SMP Action Tracker.csv",
-    "equipment": "Equipment info.csv",
-    "components": "Kilgallioch App data.csv",
-    "manplan": "Manplan 2025.csv",
-    "jobreq": "Job Request.csv",
+    "smp": "KGH_SMP_Action_Tracker.csv",
+    "equipment": "Equipment_info.csv",
+    "components": "Kilgallioch_App_data.csv",
+    "manplan": "Manplan.csv",
+    "jobreq": "Job_Request.csv",
+    "pendings": "Pendings.csv",
 }
 
 # ---------------------------------------------------------------------------
@@ -38,7 +39,7 @@ def _rows(name):
 
 
 def _get(row, i):
-    return row[i].strip() if i < len(row) and row[i] is not None else ""
+    return row[i].strip() if 0 <= i < len(row) and row[i] is not None else ""
 
 
 def clean(v):
@@ -46,51 +47,39 @@ def clean(v):
     return None if v.upper() in {b.upper() for b in _BAD} else v
 
 
-def d_dmy(s):
-    """DD/MM/YYYY -> ISO, rejecting junk and pre-2000 (mis-formatted serials)."""
+def parse_date(s):
+    """Accept ISO (YYYY-MM-DD), DD/MM/YYYY, or 'Wednesday, 7 January 2026'."""
     s = (s or "").strip()
-    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
-    if not m:
+    if not s:
         return None
-    dd, mm, yy = (int(x) for x in m.groups())
-    if yy < 2005 or yy > 2035:
+    m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", s)
+    if m:
+        y, mo, d = (int(x) for x in m.groups())
+    else:
+        m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+        if m:
+            d, mo, y = (int(x) for x in m.groups())
+        else:
+            for fmt in ("%A, %d %B %Y", "%A %d %B %Y", "%d %B %Y", "%d-%b-%Y"):
+                try:
+                    return datetime.datetime.strptime(s, fmt).date().isoformat()
+                except ValueError:
+                    continue
+            return None
+    if not (2005 <= y <= 2035):
         return None
     try:
-        return datetime.date(yy, mm, dd).isoformat()
+        return datetime.date(y, mo, d).isoformat()
     except ValueError:
         return None
-
-
-def d_mdy(s):
-    """M/D/YYYY (SMP 'Last Data Date')."""
-    s = (s or "").strip()
-    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
-    if not m:
-        return None
-    mm, dd, yy = (int(x) for x in m.groups())
-    try:
-        return datetime.date(yy, mm, dd).isoformat()
-    except ValueError:
-        return None
-
-
-def d_long(s):
-    """'Wednesday, 7 January 2026' -> ISO."""
-    s = (s or "").strip()
-    for fmt in ("%A, %d %B %Y", "%A %d %B %Y", "%d %B %Y", "%d/%m/%Y"):
-        try:
-            return datetime.datetime.strptime(s, fmt).date().isoformat()
-        except ValueError:
-            continue
-    return None
 
 
 def norm_tag(raw):
-    """'A1' / 'a01' / 'B18 Kilgallioch' -> 'A01'."""
+    """'A1' / 'a01' / 'D-32' / 'B18 Kilgallioch' -> 'A01'."""
     if not raw:
         return None
     tok = raw.strip().split()[0]
-    m = re.match(r"^([A-Za-z]+)0*(\d+)$", tok)
+    m = re.match(r"^([A-Za-z]+)[-\s]?0*(\d+)$", tok)
     return "%s%02d" % (m.group(1).upper(), int(m.group(2))) if m else None
 
 
@@ -106,47 +95,47 @@ def make_username(full, taken):
 
 
 # ---------------------------------------------------------------------------
-# per-tab parsers
+# per-tab parsers  (each CSV has a single header row; data starts at row 1)
 # ---------------------------------------------------------------------------
 
-def _turbines_and_services(rows):
-    """KGH 2025.csv - row 1 headers, rows 2+ data. Returns (order, {tag: [service recs]})."""
+def _turbines_services_defects(rows):
+    """KGH_2025.csv -> (turbine order, {tag: [service recs]}, {tag: defect text})."""
     SVC = [
         (9, "72 Month Major Service"), (13, "84 Month Major Service"),
         (19, "90 Month Major Service"), (25, "96 Month Major Service"),
         (30, "102 Month Minor Service"), (35, "108 Month Major Service"),
         (41, "114 Month Major Service"),
     ]
-    order, services = [], {}
-    for row in rows[2:]:
+    order, services, defects = [], {}, {}
+    for row in rows[1:]:
         tag = norm_tag(_get(row, 0))
         if not tag:
             continue
         order.append(tag)
         services[tag] = [
-            {"name": nm, "date": d_dmy(_get(row, ci)), "detail": None, "sort": si}
+            {"name": nm, "date": parse_date(_get(row, ci)), "detail": None, "sort": si}
             for si, (ci, nm) in enumerate(SVC)
         ]
-    return order, services
+        defects[tag] = clean(_get(row, 6))  # "Defects / Issues affecting work and/or operation"
+    return order, services, defects
 
 
 def _hv(rows):
-    """HV.csv - row 1 headers, rows 2+ data."""
     DEFS = [
         ("HV maintenance - 2023 campaign", 2, None, 0),
         ("HV maintenance - 2024/25 rephasing", 7, 6, 1),
         ("HV maintenance - 2025/26", 10, 9, 2),
     ]
     out = {}
-    for row in rows[2:]:
+    for row in rows[1:]:
         tag = norm_tag(_get(row, 0))
         if not tag:
             continue
         scope = clean(_get(row, 4))
         recs = []
         for name, ci, pi, si in DEFS:
-            date = d_dmy(_get(row, ci))
-            planned = d_dmy(_get(row, pi)) if pi is not None else None
+            date = parse_date(_get(row, ci))
+            planned = parse_date(_get(row, pi)) if pi is not None else None
             if not date and not planned:
                 continue
             detail = None
@@ -161,7 +150,6 @@ def _hv(rows):
 
 
 def _stats(rows):
-    """Stats.csv - row 1 headers, rows 2+ data."""
     DEFS = [
         ("Annual stat inspection - 2024", 3, 0),
         ("Semi-annual stat inspection - 2024", 6, 1),
@@ -171,13 +159,13 @@ def _stats(rows):
         ("10-year lift inspection", 26, 5),
     ]
     out = {}
-    for row in rows[2:]:
+    for row in rows[1:]:
         tag = norm_tag(_get(row, 0))
         if not tag:
             continue
         recs = [
-            {"name": nm, "date": d_dmy(_get(row, ci)), "detail": None, "sort": si}
-            for nm, ci, si in DEFS if d_dmy(_get(row, ci))
+            {"name": nm, "date": parse_date(_get(row, ci)), "detail": None, "sort": si}
+            for nm, ci, si in DEFS if parse_date(_get(row, ci))
         ]
         if recs:
             out[tag] = recs
@@ -185,7 +173,6 @@ def _stats(rows):
 
 
 def _retrofits(rows):
-    """25 KGH Retro.csv - row 1 names, row 2 sub-headers, rows 3+ data."""
     # (name, completed_col, started_col_or_None, sort)
     DEFS = [
         ("Slipring Exhaust (B25152100)", 3, None, 0),
@@ -210,9 +197,9 @@ def _retrofits(rows):
         ("Transformer Wall Upgrade (Bundled with HV Maintenance)", 73, None, 19),
     ]
     DONE = {"Y", "YES", "DONE", "COMPLETE", "COMPLETED"}
-    SKIP = {"N/A", "NA", "--", "-", "#N/A", "NONE", ""}
+    SKIP = {"N/A", "NA", "--", "-", "#N/A", "NONE", "", "FALSE"}
     out = {}
-    for row in rows[3:]:
+    for row in rows[1:]:
         tag = norm_tag(_get(row, 0))
         if not tag:
             continue
@@ -220,18 +207,18 @@ def _retrofits(rows):
         for name, ci, si_col, sort in DEFS:
             raw = _get(row, ci)
             started = _get(row, si_col) if si_col is not None else ""
-            date = d_dmy(raw)
+            date = parse_date(raw)
             if date:
                 status, dt = "complete", date
             elif raw.upper() in DONE:
                 status, dt = "complete", None
-            elif raw.upper() in SKIP and not started:
+            elif raw.upper() in SKIP and not parse_date(started):
                 if name.startswith("Generator Duct") and _get(row, 29).lower().startswith("ok"):
                     continue
                 if raw.upper() in {"N/A", "NA", "--", "-", "#N/A", "NONE"}:
                     continue
                 status, dt = "outstanding", None
-            elif d_dmy(started) or (started and started.upper() not in SKIP):
+            elif parse_date(started):
                 status, dt = "in_progress", None
             else:
                 status, dt = "outstanding", None
@@ -241,7 +228,6 @@ def _retrofits(rows):
 
 
 def _components(rows):
-    """Kilgallioch App data.csv - row 1 headers, row 2 sub-headers, rows 3+ data."""
     FIELDS = [
         ("Nacelle S/N", 1, 0), ("Gearbox S/N", 2, 1), ("Generator S/N", 3, 2),
         ("Transformer S/N", 4, 3), ("Ground cabinet S/N", 5, 4), ("Hub S/N", 10, 5),
@@ -253,12 +239,12 @@ def _components(rows):
         ("Blade bearing C S/N", 19, 17),
     ]
     out = {}
-    for row in rows[3:]:
+    for row in rows[1:]:
         tag = norm_tag(_get(row, 0))
         if not tag:
             continue
         recs = []
-        comm = d_dmy(_get(row, 15))
+        comm = parse_date(_get(row, 15))
         if comm:
             recs.append({"name": "Commissioned", "date": comm, "detail": None, "sort": -1})
         for name, ci, sort in FIELDS:
@@ -270,7 +256,6 @@ def _components(rows):
 
 
 def _equipment(rows):
-    """Equipment info.csv - row 0 headers, rows 1+ data."""
     out = {}
     for row in rows[1:]:
         tag = norm_tag(_get(row, 0))
@@ -279,21 +264,20 @@ def _equipment(rows):
         out[tag] = {
             "manufacturer": clean(_get(row, 1)), "model": clean(_get(row, 2)),
             "family": clean(_get(row, 3)), "serial": clean(_get(row, 4)),
-            "install_date": d_dmy(_get(row, 5)), "toc": d_dmy(_get(row, 6)),
-            "warranty_expiry": d_dmy(_get(row, 7)),
+            "install_date": parse_date(_get(row, 5)), "toc": parse_date(_get(row, 6)),
+            "warranty_expiry": parse_date(_get(row, 7)),
         }
     return out
 
 
 def _smp(rows):
-    """KGH SMP Action Tracker.csv - row 1 headers, rows 2+ data."""
     out = {}
-    for row in rows[2:]:
+    for row in rows[1:]:
         tag = norm_tag(_get(row, 0))
         if not tag:
             continue
         out[tag] = {
-            "data_date": d_mdy(_get(row, 4)),
+            "data_date": parse_date(_get(row, 4)),
             "gearbox": clean(_get(row, 5)), "generator": clean(_get(row, 6)),
             "main_bearing": clean(_get(row, 7)), "observations": clean(_get(row, 14)),
         }
@@ -301,14 +285,10 @@ def _smp(rows):
 
 
 def _manplan(rows):
-    """Manplan 2025.csv - row 11 dates, rows 13-36 technicians (col 4 = name)."""
+    """Manplan.csv - row 11 dates, rows 13-36 technicians (col 4 = name)."""
     UNAVAIL = {"HOL IN WD", "MED", "SICK", "ABS", "TRG", "PAT", "JURY"}
     date_row = rows[11] if len(rows) > 11 else []
-    col_date = {}
-    for i, v in enumerate(date_row):
-        iso = d_dmy(v)
-        if iso:
-            col_date[i] = iso
+    col_date = {i: iso for i, v in enumerate(date_row) if (iso := parse_date(v))}
 
     names, taken = [], set()
     roster = {}
@@ -319,31 +299,68 @@ def _manplan(rows):
         uname = make_username(name, taken)
         names.append({"name": name, "username": uname})
         for ci, iso in col_date.items():
-            code = _get(row, ci).strip()
-            if code.upper() in UNAVAIL:
-                roster.setdefault(iso, {})[uname] = "HOL in WD" if code.upper() == "HOL IN WD" else code.upper()
+            code = _get(row, ci).strip().upper()
+            if code in UNAVAIL:
+                roster.setdefault(iso, {})[uname] = "HOL in WD" if code == "HOL IN WD" else code
     return names, roster
 
 
 def _jobreq(rows):
-    """Job Request.csv (SCOTT & STUART 2026) - row 0 headers, rows 1+ data."""
+    """Job_Request.csv - col 4 = clean turbine, 7 = contract type, 9 = description,
+       12 = service order, 13-18 = technicians."""
     out = {}
     for row in rows[1:]:
-        tag = norm_tag(_get(row, 3))
+        tag = norm_tag(_get(row, 4) or _get(row, 3))
         if not tag:
             continue
-        techs = [_get(row, i) for i in range(12, 18)]
-        techs = [t for t in techs if t]
-        wt = _get(row, 6)
+        techs = [t for t in (_get(row, i) for i in range(13, 19)) if t and t != "-"]
+        wt = _get(row, 7)
         out.setdefault(tag, []).append({
-            "date": d_long(_get(row, 0)),
-            "description": _get(row, 8) or wt or "Work order",
+            "date": parse_date(_get(row, 0)),
+            "description": _get(row, 9) or wt or "Work order",
             "work_type": (wt.title().replace("Hv", "HV")) or None,
-            "service_order": _get(row, 11) or None,
+            "service_order": (_get(row, 12) if _get(row, 12) not in ("", "-") else None),
             "technicians": ", ".join(techs) or None,
         })
     for tag in out:
         out[tag].sort(key=lambda e: e["date"] or "", reverse=True)
+    return out
+
+
+def _pendings(rows):
+    """Pendings.csv -> list of pending entries per turbine.
+       col 0 WO code, 3 turbine, 4 priority, 5 description, 6 long desc,
+       7 detected (CREA/APR), 14 note, 17 system, 28 notification date."""
+    STATUS = {"CREA": "SUBMITTED", "APR": "REVIEWED"}
+    out = []
+    for row in rows[1:]:
+        if not any(c for c in row):
+            continue
+        tag = norm_tag(_get(row, 3))
+        if not tag:
+            continue
+        desc = _get(row, 5)
+        parts = [p for p in (desc, _get(row, 6), _get(row, 14)) if p]
+        seen, note_parts = set(), []
+        for p in parts:
+            key = p.lower().strip()
+            if key and key not in seen:
+                seen.add(key)
+                note_parts.append(p)
+        note = "\n\n".join(note_parts) or "(no description)"
+        try:
+            priority = int(_get(row, 4))
+        except ValueError:
+            priority = None
+        out.append({
+            "tag": tag,
+            "wo_code": _get(row, 0) or None,
+            "priority": priority,
+            "system": clean(_get(row, 17)),
+            "note": note,
+            "status": STATUS.get(_get(row, 7).upper(), "SUBMITTED"),
+            "created_at": parse_date(_get(row, 28)) or parse_date(_get(row, 10)),
+        })
     return out
 
 
@@ -352,13 +369,13 @@ def _jobreq(rows):
 # ---------------------------------------------------------------------------
 
 def load():
-    kgh = _rows(FILES["kgh2025"])
-    order, services = _turbines_and_services(kgh)
+    order, services, defects = _turbines_services_defects(_rows(FILES["kgh2025"]))
     names, roster = _manplan(_rows(FILES["manplan"]))
     return {
         "turbines": order,
         "technicians": names,
         "services": services,
+        "defects": defects,
         "hv": _hv(_rows(FILES["hv"])),
         "stat": _stats(_rows(FILES["stats"])),
         "retrofits": _retrofits(_rows(FILES["retro"])),
@@ -367,6 +384,7 @@ def load():
         "smp": _smp(_rows(FILES["smp"])),
         "roster": roster,
         "history": _jobreq(_rows(FILES["jobreq"])),
+        "pendings": _pendings(_rows(FILES["pendings"])),
     }
 
 
@@ -377,9 +395,12 @@ if __name__ == "__main__":  # quick sanity dump
     for k in ("services", "hv", "stat", "retrofits", "components", "equipment", "smp", "history"):
         print(f"{k}: {len(d[k])} turbines")
     print("roster dates:", len(d["roster"]))
-    a01 = d["turbines"][0] if "A01" not in d["turbines"] else "A01"
+    print("defects with text:", sum(1 for v in d["defects"].values() if v))
+    print("pendings:", len(d["pendings"]),
+          "| turbines:", len({p['tag'] for p in d['pendings']}))
+    print("A01 defect:", d["defects"].get("A01"))
     print("A01 hv:", d["hv"].get("A01"))
-    print("A01 retro (not complete):",
+    print("A01 retro not-complete:",
           [r["name"] for r in d["retrofits"].get("A01", []) if r["status"] != "complete"])
-    print("A01 smp:", d["smp"].get("A01"))
-    print("A01 equipment:", d["equipment"].get("A01"))
+    print("first pending:", d["pendings"][0])
+    print("A01 history[0]:", d["history"].get("A01", [None])[0])

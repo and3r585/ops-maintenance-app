@@ -378,12 +378,15 @@ async function viewAsset(id) {
     return h("div", { class: "grid cols-2" },
       h("div", { class: "card" }, h("h3", {}, "Identification"),
         dl([["Turbine", a.tag], ...(a.name !== a.tag ? [["Name", a.name]] : []),
-            ["Type", a.type], ["Location", a.location],
-            ["Criticality", badge(a.criticality)]])),
+            ["Type", a.type], ["Location", a.location]])),
       h("div", { class: "card" }, h("h3", {}, "Equipment"),
         dl([["Manufacturer", a.manufacturer], ["Model", a.model], ["Family", a.family],
             ["Serial number", a.serial], ["Installed", fmtDate(a.install_date)],
             ["Take-over cert.", fmtDate(a.toc)], ["Warranty expiry", fmtDate(a.warranty_expiry)]])),
+      h("div", { class: "card defect-card" + (a.defect ? " flagged" : ""), style: "grid-column:1/-1" },
+        h("h3", {}, "Defect / operational issue"),
+        h("p", { style: "margin:0;" + (a.defect ? "" : "color:var(--text-soft)") },
+          a.defect || "No defects or issues affecting work or operation.")),
       h("div", { class: "card next-svc " + dueClass, style: "grid-column:1/-1" },
         h("h3", {}, "Next service due"),
         h("div", { class: "next-svc-body" },
@@ -543,9 +546,15 @@ async function viewAsset(id) {
             }
           }, s[0] + s.slice(1).toLowerCase()))) : null;
 
+      const meta = [];
+      if (p.wo_code) meta.push(h("span", { class: "wo-so" }, "WO " + p.wo_code));
+      if (p.priority != null) meta.push(h("span", { class: "pri-tag p" + p.priority }, "Priority " + p.priority));
+      if (p.system) meta.push(h("span", {}, p.system));
+
       wrap.append(h("div", { class: "pending" },
         h("div", { class: "head" },
           h("b", {}, p.author_name), "·", fmtWhen(p.created_at), badge(p.status)),
+        meta.length ? h("div", { class: "pending-meta" }, ...meta) : null,
         h("div", {}, esc(p.note)),
         p.photos.length ? h("div", { class: "photos" }, ...p.photos.map(ph =>
           h("img", { src: ph.url, alt: ph.caption || "photo", loading: "lazy", onclick: () => lightbox(ph.url) }))) : null,

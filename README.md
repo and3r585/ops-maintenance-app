@@ -55,12 +55,13 @@ Usernames are first-initial + surname, lowercase (`sclydesdale`, `scant`, `jgang
   date; an unavailable technician is refused.
 - **Asset detail** — tabs for **Details**, **Service dates**, **HV history**, **Stat history**,
   **Retrofits**, **Components**, **History** and **Pendings**.
-  - *Details* — **Equipment** card (from the **Equipment info** workbook); a **Next service
-    due** card (108-month completion + 6 months, with a days-away / overdue indicator); and a
-    **Condition monitoring (SMP)** box with gearbox / generator / main-bearing state and
-    observations, from the *KGH SMP Action Tracker* tab.
+  - *Details* — **Identification** (turbine / type / location); an **Equipment** card;
+    a **Defect / operational issue** card (KGH 2025 column G — highlighted when present);
+    a **Next service due** card (108-month completion + 6 months, with a days-away / overdue
+    indicator); and a **Condition monitoring (SMP)** box with gearbox / generator /
+    main-bearing state and observations.
   - *Service dates* — the seven major/minor service completion dates (72/84/90/96/102/108/114
-    month), from `KGH 2025.csv`.
+    month), from `KGH_2025.csv`.
   - *HV history* — HV maintenance completion dates (2023 campaign, 2024/25 rephasing,
     2025/26), from `HV.csv`.
   - *Stat history* — annual and semi-annual statutory inspections plus the 10-year lift
@@ -75,26 +76,30 @@ Usernames are first-initial + surname, lowercase (`sclydesdale`, `scant`, `jgang
     from the *SCOTT & STUART 2026* tab of the **Job Request** workbook — ~1,600 entries across
     the 96 turbines; site-wide rows (no turbine) are skipped. Filterable by work type.
     Any current scheduled/open jobs are listed above the log.
-  - *Pendings* — any user can add an entry (note + up to 8 photos, camera on mobile);
-    admins mark entries Submitted → Reviewed → Actioned.
+  - *Pendings* — ~570 open SGRE/SAP notifications imported from `Pendings.csv` (each with its
+    WO number, priority and affected system; `CREA`→Submitted, `APR`→Reviewed). Any user can
+    also add an entry (note + up to 8 photos); admins move entries Submitted → Reviewed →
+    Actioned.
 
 ## Data
 
 All content is seeded from **CSV exports of the source spreadsheets**, one file per tab, in
 `source/`. `seed_data.py` parses them on first run (`--reset` to re-seed after editing a CSV);
-nothing is needed at runtime once the DB is built.
+nothing is needed at runtime once the DB is built. Dates in any of `YYYY-MM-DD`,
+`DD/MM/YYYY` or `Weekday, D Month YYYY` form are all accepted.
 
 | `source/` file | feeds |
 |---|---|
-| `KGH 2025.csv` | turbine list + service completion dates (72–114 month) |
+| `KGH_2025.csv` | turbine list, service completion dates (72–114 month), the per-turbine defect note (col G) |
 | `HV.csv` | HV maintenance history |
 | `Stats.csv` | statutory inspection history |
-| `25 KGH Retro.csv` | retrofit status (complete / in progress / outstanding) |
-| `Kilgallioch App data.csv` | component serial numbers (blade-bearing cells are `#REF!` in the export) |
-| `Equipment info.csv` | make / model / family / serial / dates |
-| `KGH SMP Action Tracker.csv` | gearbox / generator / main-bearing state + observations |
-| `Manplan 2025.csv` | technicians + the day-by-day availability roster |
-| `Job Request.csv` | per-turbine work-order log (SCOTT & STUART 2026) |
+| `25_KGH_Retro.csv` | retrofit status (complete / in progress / outstanding) |
+| `Kilgallioch_App_data.csv` | component serial numbers (blade-bearing columns are blank in the export) |
+| `Equipment_info.csv` | make / model / family / serial / dates |
+| `KGH_SMP_Action_Tracker.csv` | gearbox / generator / main-bearing state + observations |
+| `Manplan.csv` | technicians + the day-by-day availability roster |
+| `Job_Request.csv` | per-turbine work-order log |
+| `Pendings.csv` | open pending notifications per turbine |
 
 ## Extending it later
 
