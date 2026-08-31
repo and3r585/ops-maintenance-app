@@ -17,7 +17,26 @@ python3 app.py --port 9000   # different port
 python3 app.py --reset       # wipe data/ and reseed
 ```
 
-Data (SQLite DB + uploaded photos) lives in `ops-app/data/`. Delete that folder to start fresh.
+Data (SQLite DB + uploaded photos) lives in `data/` (or `$DATA_DIR`). Delete it to start fresh.
+The server honours `$PORT` and `$HOST` when set (binds `0.0.0.0` on a host).
+
+## Deploy (Render)
+
+This is a **persistent Python process** with a local SQLite database — it will **not** run on
+serverless platforms like Vercel/Netlify (no long-running process, ephemeral filesystem).
+Use a host that runs a real process:
+
+1. In the [Render](https://render.com) dashboard: **New → Blueprint** and pick this repo.
+2. Render reads [`render.yaml`](render.yaml), builds (nothing to install) and starts `python app.py`.
+3. Log in with `admin` and the generated `ADMIN_PASSWORD` (Environment tab of the service).
+
+The default is Render's **free** plan: fully working, but the disk is wiped on every restart,
+so pending entries / photos added *through the app* don't survive a restart (the ~570 imported
+pendings and everything else re-seed from `source/*.csv` on each cold start). For durable
+storage, uncomment the paid `plan` + `disk` + `DATA_DIR` block in `render.yaml`.
+
+Railway / Fly.io / a small VPS work the same way — run `python app.py`, give it a volume for
+`$DATA_DIR`.
 
 ## Logins
 
@@ -113,6 +132,8 @@ in `web/app.js`.
 app.py            server + schema + seed orchestration (stdlib only)
 seed_data.py      CSV parsers -> structures the seeder consumes
 source/*.csv      one CSV per source-spreadsheet tab
+render.yaml       Render deploy blueprint
+requirements.txt  empty (marks the repo as Python for Render)
 web/index.html    SPA shell
 web/app.js        views, router, planning board
 web/styles.css    Claude-inspired theme (light + dark, follows OS, manual toggle ◐)

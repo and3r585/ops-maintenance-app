@@ -1,0 +1,2 @@
+# Site Portal runs on the Python standard library only — no dependencies.
+# This file exists so Render's native Python runtime is detected.

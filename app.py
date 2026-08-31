@@ -32,7 +32,8 @@ import seed_data
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
-DATA_DIR = os.path.join(BASE_DIR, "data")
+# $DATA_DIR lets a host point the SQLite DB + uploads at a persistent disk.
+DATA_DIR = os.environ.get("DATA_DIR") or os.path.join(BASE_DIR, "data")
 UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
 DB_PATH = os.path.join(DATA_DIR, "app.db")
 
@@ -224,7 +225,7 @@ def seed():
 
     # --- users: admin + the technicians from Manplan 2025.csv (col E, rows 14-37) ---
     if conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"] == 0:
-        rows = [("admin", "admin123", "ADMIN", "Alex Reid")]
+        rows = [("admin", os.environ.get("ADMIN_PASSWORD") or "admin123", "ADMIN", "Alex Reid")]
         for t in data["technicians"]:
             rows.append((t["username"], "tech123", "TECHNICIAN", t["name"]))
         for username, pw, role, name in rows:
