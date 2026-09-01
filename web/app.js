@@ -1010,22 +1010,6 @@ async function viewAsset(id) {
 
   function historyPane() {
     const wrap = h("div", {});
-    const jobs = detail.jobs || [];
-    if (jobs.length) {
-      const jc = h("div", { class: "card" }, h("h3", {}, "Scheduled / open jobs"));
-      for (const j of jobs) {
-        jc.append(h("div", { class: "row-card", style: "cursor:default" },
-          h("div", { class: "main" },
-            h("div", { class: "name" }, j.title),
-            h("div", { class: "meta" },
-              (j.assignee_name ? "Assigned to " + j.assignee_name : "Unassigned") +
-              (j.scheduled_date ? " · " + fmtDate(j.scheduled_date) : "") +
-              (j.due_date ? " · due " + fmtDate(j.due_date) : ""))),
-          h("div", { class: "aside" }, badge(j.priority), badge(j.status))));
-      }
-      wrap.append(jc);
-    }
-
     const hist = detail.history || [];
     const card = h("div", { class: "card" }, h("h3", {}, "Work order history"));
     const types = [...new Set(hist.map(e => e.work_type).filter(Boolean))].sort();
@@ -1209,7 +1193,7 @@ async function viewPlanning() {
             if (payload.kind === "job" && payload.fromTeam) mutate({ op: "clear_job", team_no: +payload.fromTeam });
             if (payload.kind === "tech" && payload.fromTeam) mutate({ op: "remove_member", team_no: +payload.fromTeam, user_id: payload.id });
           } else if (payload.kind === "job") {
-            mutate({ op: "set_job", team_no: +team, job_id: payload.id });
+            mutate({ op: "set_job", team_no: +team, job_id: payload.id });   // job_id = pending entry id
           } else if (payload.kind === "tech") {
             mutate({ op: "add_member", team_no: +team, user_id: payload.id });
           }
@@ -1235,10 +1219,10 @@ async function viewPlanning() {
   function jobChip(j, fromTeam) {
     const card = h("div", { class: "task-chip" + (fromTeam ? " placed" : "") },
       h("div", { class: "jt" }, j.title),
-      h("div", { class: "jm" }, badge(j.priority),
+      h("div", { class: "jm" },
+        j.priority != null ? h("span", { class: "pri-tag p" + j.priority }, "Priority " + j.priority) : null,
         j.asset_tag ? h("span", {}, j.asset_tag) : null,
-        j.due_date ? h("span", {}, "due " + fmtDate(j.due_date)) : null,
-        j.estimated_minutes ? h("span", {}, j.estimated_minutes + " min") : null),
+        j.wo_code ? h("span", {}, "WO " + j.wo_code) : null),
       fromTeam ? h("button", { class: "chip-x", title: "Remove", onclick: () => mutate({ op: "clear_job", team_no: +fromTeam }) }, "×") : null);
     card.addEventListener("pointerdown", (e) => startDrag(e, { kind: "job", id: j.id, fromTeam }, card));
     return card;
@@ -1260,10 +1244,14 @@ async function viewPlanning() {
         h("h3", { class: "rail-head" }, `Unavailable (${plan.unavailable.length})`),
         h("div", { class: "chip-wrap" }, ...plan.unavailable.map(t => techChip(t))));
     }
+    const shown = plan.backlog.length;
+    const total = plan.backlog_total != null ? plan.backlog_total : shown;
     rail.append(
-      h("h3", { class: "rail-head" }, `Tasks (${plan.backlog.length})`),
+      h("h3", { class: "rail-head" }, `Tasks (${shown}${total > shown ? " of " + total : ""})`),
+      total > shown ? h("p", { class: "slot-hint", style: "margin:.1rem 0 .4rem" },
+        "Reviewed pending entries, highest priority first. Review more in Site Dashboard → pendings.") : null,
       h("div", { class: "chip-wrap", "data-accept": "job", "data-team": "rail" },
-        plan.backlog.length ? null : h("span", { class: "slot-hint" }, "No outstanding tasks"),
+        shown ? null : h("span", { class: "slot-hint" }, "No reviewed pending entries to schedule"),
         ...plan.backlog.map(j => jobChip(j))));
 
     clear(grid);

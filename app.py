@@ -133,11 +133,11 @@ CREATE TABLE IF NOT EXISTS record_changes (
 );
 CREATE INDEX IF NOT EXISTS ix_record_changes_at ON record_changes(changed_at);
 
--- Daily team plan: 10 team rows per date, each an (optional) job + its technicians.
+-- Daily team plan: 10 team rows per date, each an (optional) pending entry + its technicians.
 CREATE TABLE IF NOT EXISTS plan_team (
-    plan_date TEXT NOT NULL,
-    team_no   INTEGER NOT NULL,
-    job_id    INTEGER REFERENCES jobs(id),
+    plan_date  TEXT NOT NULL,
+    team_no    INTEGER NOT NULL,
+    pending_id INTEGER REFERENCES pending_entries(id),
     PRIMARY KEY (plan_date, team_no)
 );
 CREATE TABLE IF NOT EXISTS plan_member (
@@ -181,29 +181,6 @@ CREATE TABLE IF NOT EXISTS pending_photos (
     caption           TEXT,
     kind              TEXT NOT NULL DEFAULT 'note',   -- 'note' | 'evidence'
     created_at        TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS jobs (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    title          TEXT NOT NULL,
-    description    TEXT,
-    asset_id       INTEGER REFERENCES assets(id),
-    priority       TEXT NOT NULL DEFAULT 'MEDIUM',
-    status         TEXT NOT NULL DEFAULT 'OUTSTANDING',
-    estimated_minutes INTEGER,
-    due_date       TEXT,
-    assignee_id    INTEGER REFERENCES users(id),
-    scheduled_date TEXT,
-    created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS job_activity (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id     INTEGER NOT NULL REFERENCES jobs(id),
-    user_id    INTEGER REFERENCES users(id),
-    message    TEXT NOT NULL,
-    created_at TEXT NOT NULL
 );
 
 -- Module registry: drives navigation so new function areas can be bolted on later.
@@ -254,6 +231,22 @@ def get_db():
 def seed():
     conn = get_db()
     conn.executescript(SCHEMA)
+
+    # --- migration: retire the early hard-coded `jobs` demo table.
+    #     The planning board now schedules real pending entries, so plan_team
+    #     references pending_entries instead of jobs. plan_team only holds
+    #     day-scoped scratch assignments, so it is safe to rebuild.
+    pt_cols = [r["name"] for r in conn.execute("PRAGMA table_info(plan_team)")]
+    if pt_cols and "pending_id" not in pt_cols:
+        conn.executescript(
+            "DROP TABLE IF EXISTS plan_team;"
+            "CREATE TABLE plan_team ("
+            "  plan_date  TEXT NOT NULL,"
+            "  team_no    INTEGER NOT NULL,"
+            "  pending_id INTEGER REFERENCES pending_entries(id),"
+            "  PRIMARY KEY (plan_date, team_no));"
+        )
+    conn.executescript("DROP TABLE IF EXISTS job_activity; DROP TABLE IF EXISTS jobs;")
 
     data = seed_data.load()
 
@@ -347,33 +340,6 @@ def seed():
                     (aid[tag], e.get("date"), e.get("description") or "Work order",
                      e.get("work_type"), e.get("service_order"), e.get("technicians")),
                 )
-
-    if conn.execute("SELECT COUNT(*) c FROM jobs").fetchone()["c"] == 0:
-        # (title, turbine, priority, status, est_min, due_date, assignee_username, scheduled_date)
-        jobs = [
-            ("72 month major service", "A01", "HIGH", "OUTSTANDING", 480, "2026-09-10", None, None),
-            ("Pitch system fault - investigate", "C19", "URGENT", "OUTSTANDING", 240, "2026-09-02", None, None),
-            ("Blade leading-edge inspection", "A05", "MEDIUM", "OUTSTANDING", 180, "2026-09-12", None, None),
-            ("Gearbox oil sample and filter change", "B12", "MEDIUM", "OUTSTANDING", 120, "2026-09-08", None, None),
-            ("Yaw brake pad replacement", "D27", "HIGH", "OUTSTANDING", 300, "2026-09-05", None, None),
-            ("Annual statutory inspection", "E37", "HIGH", "OUTSTANDING", 90, "2026-09-04", None, None),
-            ("Converter cooling fan replacement", "F47", "MEDIUM", "OUTSTANDING", 150, "2026-09-15", None, None),
-            ("HV maintenance - transformer", "G57", "HIGH", "OUTSTANDING", 360, "2026-09-18", None, None),
-            ("6 month lift inspection", "H67", "LOW", "OUTSTANDING", 60, "2026-09-03", None, None),
-            ("Nacelle anemometer swap", "J87", "LOW", "OUTSTANDING", 45, "2026-09-06", None, None),
-            ("84 month major service", "I77", "HIGH", "OUTSTANDING", 480, "2026-09-09", None, None),
-            ("Down-tower bolt torque check", "B15", "LOW", "OUTSTANDING", 120, "2026-09-04", None, None),
-        ]
-        aid = {r["tag"]: r["id"] for r in conn.execute("SELECT id,tag FROM assets")}
-        uid = {r["username"]: r["id"] for r in conn.execute("SELECT id,username FROM users")}
-        for t in jobs:
-            conn.execute(
-                "INSERT INTO jobs (title,description,asset_id,priority,status,estimated_minutes,"
-                "due_date,assignee_id,scheduled_date,created_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (t[0], "", aid.get(t[1]), t[2], t[3], t[4], t[5],
-                 uid.get(t[6]) if t[6] else None, t[7], now(), now()),
-            )
 
     # --- pending entries: imported from Pendings.csv (open SGRE/SAP notifications) ---
     if conn.execute("SELECT COUNT(*) c FROM pending_entries").fetchone()["c"] == 0:
@@ -755,24 +721,6 @@ class Handler(BaseHTTPRequestHandler):
             visible = [dict(r) for r in rows if r["min_role"] == "TECHNICIAN" or user["role"] == "ADMIN"]
             return 200, {"modules": visible}
 
-        # --- technicians ---
-        if parts == ["technicians"] and method == "GET":
-            self._require(conn, "ADMIN")
-            date = (query.get("date", [""])[0] or "").strip()
-            rows = conn.execute(
-                "SELECT u.id, u.username, u.display_name, r.code AS reason, "
-                "(SELECT COUNT(*) FROM jobs j WHERE j.assignee_id = u.id AND j.status IN ('SCHEDULED','IN_PROGRESS')) AS job_count "
-                "FROM users u LEFT JOIN roster r ON r.user_id = u.id AND r.on_date = ? "
-                "WHERE u.role = 'TECHNICIAN' AND u.active = 1 ORDER BY u.display_name",
-                (date,),
-            ).fetchall()
-            techs = []
-            for r in rows:
-                d = dict(r)
-                d["available"] = d["reason"] is None
-                techs.append(d)
-            return 200, {"technicians": techs, "date": date}
-
         # --- site dashboard (any signed-in user; read-only figures) ---
         if parts == ["dashboard"] and method == "GET":
             self._require(conn)
@@ -851,30 +799,26 @@ class Handler(BaseHTTPRequestHandler):
             if not (1 <= team_no <= 10):
                 raise ApiError(400, "team_no must be 1-10")
             conn.execute(
-                "INSERT OR IGNORE INTO plan_team (plan_date, team_no, job_id) VALUES (?,?,NULL)",
+                "INSERT OR IGNORE INTO plan_team (plan_date, team_no, pending_id) VALUES (?,?,NULL)",
                 (date, team_no),
             )
             if op == "set_job":
-                job_id = data.get("job_id")
-                job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
-                if not job:
-                    raise ApiError(404, "Job not found")
-                # free the job from any other team on this date
-                conn.execute("UPDATE plan_team SET job_id = NULL WHERE plan_date = ? AND job_id = ?",
-                             (date, job_id))
-                conn.execute("UPDATE plan_team SET job_id = ? WHERE plan_date = ? AND team_no = ?",
-                             (job_id, date, team_no))
-                conn.execute("UPDATE jobs SET status = 'SCHEDULED', scheduled_date = ?, updated_at = ? "
-                             "WHERE id = ? AND status = 'OUTSTANDING'", (date, now(), job_id))
+                pending_id = data.get("job_id")
+                task = conn.execute(
+                    "SELECT id, status FROM pending_entries WHERE id = ?", (pending_id,)
+                ).fetchone()
+                if not task:
+                    raise ApiError(404, "Pending entry not found")
+                if task["status"] == "COMPLETED":
+                    raise ApiError(409, "That pending entry is already completed")
+                # a pending sits on at most one team per date
+                conn.execute("UPDATE plan_team SET pending_id = NULL WHERE plan_date = ? AND pending_id = ?",
+                             (date, pending_id))
+                conn.execute("UPDATE plan_team SET pending_id = ? WHERE plan_date = ? AND team_no = ?",
+                             (pending_id, date, team_no))
             elif op == "clear_job":
-                row = conn.execute("SELECT job_id FROM plan_team WHERE plan_date = ? AND team_no = ?",
-                                   (date, team_no)).fetchone()
-                jid = row["job_id"] if row else None
-                conn.execute("UPDATE plan_team SET job_id = NULL WHERE plan_date = ? AND team_no = ?",
+                conn.execute("UPDATE plan_team SET pending_id = NULL WHERE plan_date = ? AND team_no = ?",
                              (date, team_no))
-                if jid:
-                    conn.execute("UPDATE jobs SET status = 'OUTSTANDING', scheduled_date = NULL, updated_at = ? "
-                                 "WHERE id = ? AND status = 'SCHEDULED'", (now(), jid))
             elif op == "add_member":
                 uid = data.get("user_id")
                 u = conn.execute("SELECT * FROM users WHERE id = ? AND role = 'TECHNICIAN'", (uid,)).fetchone()
@@ -910,11 +854,6 @@ class Handler(BaseHTTPRequestHandler):
             asset = conn.execute("SELECT * FROM assets WHERE id = ?", (parts[1],)).fetchone()
             if not asset:
                 raise ApiError(404, "Asset not found")
-            jobs = conn.execute(
-                "SELECT j.*, u.display_name AS assignee_name FROM jobs j "
-                "LEFT JOIN users u ON u.id = j.assignee_id WHERE j.asset_id = ? ORDER BY j.created_at DESC",
-                (parts[1],),
-            ).fetchall()
             recs = conn.execute(
                 "SELECT id, category, name, occurred_on AS date, detail, status, sort FROM asset_records "
                 "WHERE asset_id = ? ORDER BY sort, name", (parts[1],),
@@ -936,7 +875,6 @@ class Handler(BaseHTTPRequestHandler):
                 "asset": dict(asset),
                 "prev": {"id": prev_id, "tag": tag_by_id[prev_id]},
                 "next": {"id": next_id, "tag": tag_by_id[next_id]},
-                "jobs": [dict(r) for r in jobs],
                 "services": services,
                 "hv": [dict(r) for r in recs if r["category"] == "hv"],
                 "stat": [dict(r) for r in recs if r["category"] == "stat"],
@@ -1251,92 +1189,6 @@ class Handler(BaseHTTPRequestHandler):
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 fname)
 
-        # --- jobs ---
-        if parts == ["jobs"] and method == "GET":
-            self._require(conn)
-            where, args = [], []
-            if "status" in query:
-                where.append("j.status = ?"); args.append(query["status"][0])
-            if query.get("unassigned", ["false"])[0] == "true":
-                where.append("j.assignee_id IS NULL")
-            if "assignee" in query:
-                where.append("j.assignee_id = ?"); args.append(query["assignee"][0])
-            sql = ("SELECT j.*, a.tag AS asset_tag, a.name AS asset_name, u.display_name AS assignee_name "
-                   "FROM jobs j LEFT JOIN assets a ON a.id = j.asset_id "
-                   "LEFT JOIN users u ON u.id = j.assignee_id")
-            if where:
-                sql += " WHERE " + " AND ".join(where)
-            sql += " ORDER BY CASE j.priority WHEN 'URGENT' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END, j.due_date"
-            rows = conn.execute(sql, args).fetchall()
-            return 200, {"jobs": [dict(r) for r in rows]}
-
-        if parts == ["jobs"] and method == "POST":
-            user = self._require(conn, "ADMIN")
-            data = self._json_body()
-            title = (data.get("title") or "").strip()
-            if not title:
-                raise ApiError(400, "Title is required")
-            cur = conn.execute(
-                "INSERT INTO jobs (title,description,asset_id,priority,status,estimated_minutes,due_date,created_at,updated_at) "
-                "VALUES (?,?,?,?,'OUTSTANDING',?,?,?,?)",
-                (title, data.get("description", ""), data.get("asset_id"),
-                 data.get("priority", "MEDIUM"), data.get("estimated_minutes"),
-                 data.get("due_date"), now(), now()),
-            )
-            log_job(conn, cur.lastrowid, user["id"], "Job created")
-            return 201, {"id": cur.lastrowid}
-
-        if len(parts) == 2 and parts[0] == "jobs" and method == "PATCH":
-            user = self._require(conn, "ADMIN")
-            job = conn.execute("SELECT * FROM jobs WHERE id = ?", (parts[1],)).fetchone()
-            if not job:
-                raise ApiError(404, "Job not found")
-            data = self._json_body()
-            sets, args, notes = [], [], []
-
-            if "assignee_id" in data:
-                new_assignee = data["assignee_id"]
-                sets.append("assignee_id = ?"); args.append(new_assignee)
-                if new_assignee:
-                    who = conn.execute("SELECT display_name FROM users WHERE id = ?", (new_assignee,)).fetchone()
-                    if not who:
-                        raise ApiError(400, "Unknown technician")
-                    notes.append("Assigned to %s" % who["display_name"])
-                    if job["status"] == "OUTSTANDING":
-                        sets.append("status = ?"); args.append("SCHEDULED")
-                else:
-                    notes.append("Unassigned - returned to backlog")
-                    sets.append("status = ?"); args.append("OUTSTANDING")
-                    sets.append("scheduled_date = ?"); args.append(None)
-
-            if "scheduled_date" in data:
-                sets.append("scheduled_date = ?"); args.append(data["scheduled_date"])
-                notes.append("Scheduled for %s" % data["scheduled_date"])
-
-            if "status" in data:
-                st = data["status"]
-                if st not in ("OUTSTANDING", "SCHEDULED", "IN_PROGRESS", "COMPLETE", "CANCELLED"):
-                    raise ApiError(400, "Invalid status")
-                sets.append("status = ?"); args.append(st)
-                notes.append("Status -> %s" % st)
-
-            if "priority" in data:
-                sets.append("priority = ?"); args.append(data["priority"])
-
-            if not sets:
-                raise ApiError(400, "Nothing to update")
-            sets.append("updated_at = ?"); args.append(now())
-            args.append(parts[1])
-            conn.execute("UPDATE jobs SET %s WHERE id = ?" % ", ".join(sets), args)
-            for n in notes:
-                log_job(conn, job["id"], user["id"], n)
-            updated = conn.execute(
-                "SELECT j.*, a.tag AS asset_tag, a.name AS asset_name, u.display_name AS assignee_name "
-                "FROM jobs j LEFT JOIN assets a ON a.id=j.asset_id LEFT JOIN users u ON u.id=j.assignee_id "
-                "WHERE j.id = ?", (parts[1],),
-            ).fetchone()
-            return 200, {"job": dict(updated)}
-
         return None
 
     def _multipart(self):
@@ -1421,11 +1273,6 @@ def public_user(row):
             "display_name": row["display_name"], "role": row["role"]}
 
 
-def log_job(conn, job_id, user_id, message):
-    conn.execute("INSERT INTO job_activity (job_id,user_id,message,created_at) VALUES (?,?,?,?)",
-                 (job_id, user_id, message, now()))
-
-
 def load_plan(conn, date):
     """Return the 10-team day plan plus roster + backlog for `date`."""
     tech_rows = conn.execute(
@@ -1446,36 +1293,51 @@ def load_plan(conn, date):
     for m in members:
         by_team.setdefault(m["team_no"], []).append({"id": m["id"], "display_name": m["display_name"]})
 
+    def task(row):
+        note = (row["note"] or "").strip().replace("\r\n", "\n")
+        title = note.split("\n", 1)[0]
+        if len(title) > 90:
+            title = title[:88].rstrip() + "…"
+        return {"id": row["id"], "title": title or "(no description)",
+                "asset_tag": row["asset_tag"], "priority": row["priority"],
+                "wo_code": row["wo_code"], "status": row["status"]}
+
     placed = conn.execute(
-        "SELECT t.team_no, j.id, j.title, j.priority, j.estimated_minutes, j.due_date, "
-        "a.tag AS asset_tag FROM plan_team t JOIN jobs j ON j.id = t.job_id "
-        "LEFT JOIN assets a ON a.id = j.asset_id WHERE t.plan_date = ?",
+        "SELECT t.team_no, p.id, p.note, p.priority, p.wo_code, p.status, a.tag AS asset_tag "
+        "FROM plan_team t JOIN pending_entries p ON p.id = t.pending_id "
+        "JOIN assets a ON a.id = p.asset_id WHERE t.plan_date = ?",
         (date,),
     ).fetchall()
-    job_by_team = {p["team_no"]: dict(p) for p in placed}
+    task_by_team = {p["team_no"]: task(p) for p in placed}
     placed_ids = {p["id"] for p in placed}
 
     teams = []
     for n in range(1, 11):
         teams.append({
             "team_no": n,
-            "job": job_by_team.get(n),
+            "job": task_by_team.get(n),
             "members": by_team.get(n, []),
         })
 
-    backlog = conn.execute(
-        "SELECT j.id, j.title, j.priority, j.estimated_minutes, j.due_date, a.tag AS asset_tag "
-        "FROM jobs j LEFT JOIN assets a ON a.id = j.asset_id "
-        "WHERE j.status IN ('OUTSTANDING','SCHEDULED') "
-        "ORDER BY CASE j.priority WHEN 'URGENT' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END, j.due_date"
+    # backlog = open pending entries an admin has reviewed (triaged, ready to schedule),
+    # highest priority first, capped so the rail stays usable.
+    rows = conn.execute(
+        "SELECT p.id, p.note, p.priority, p.wo_code, p.status, a.tag AS asset_tag "
+        "FROM pending_entries p JOIN assets a ON a.id = p.asset_id "
+        "WHERE p.status = 'REVIEWED' "
+        "ORDER BY p.priority IS NULL, p.priority, p.created_at LIMIT 60"
     ).fetchall()
-    backlog = [dict(j) for j in backlog if j["id"] not in placed_ids]
+    backlog = [task(r) for r in rows if r["id"] not in placed_ids]
+    open_reviewed = conn.execute(
+        "SELECT COUNT(*) c FROM pending_entries WHERE status = 'REVIEWED'"
+    ).fetchone()["c"]
 
     assigned_ids = {m["id"] for m in members}
     return {
         "date": date,
         "teams": teams,
         "backlog": backlog,
+        "backlog_total": open_reviewed,
         "available": [t for t in techs if t["available"] and t["id"] not in assigned_ids],
         "unavailable": [t for t in techs if not t["available"]],
         "assigned_count": len(assigned_ids),

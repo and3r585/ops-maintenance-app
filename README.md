@@ -84,8 +84,8 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   with an open-pendings badge per turbine. No operational-status field on assets.
 - **Technicians / roster** — the day-by-day availability grid comes from column E, rows
   14–37 of the *Manplan 2025* tab; a roster row attaches to a login account when the
-  Manplan-derived username matches a `Credentials.csv` username. The planning-board columns
-  and job assignees are the **active technician accounts** from `Credentials.csv`.
+  Manplan-derived username matches a `Credentials.csv` username. The planning-board team
+  members are the **active technician accounts** from `Credentials.csv`.
 - **Site dashboard** — open pending-entry count (by status), the next 10 service due
   dates across the site (108-month + 6 months, soonest first), and every retrofit campaign
   still outstanding or in progress with the affected turbine counts. Visible to everyone;
@@ -106,11 +106,14 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
 - **Planning board (admin)** — pick a date; the left rail shows **available technicians** as
   draggable chips (unavailable ones greyed with their reason, from the *Manplan 2025* day
   grid — unavailable = `HOL in WD` / `MED` / `SICK` / `ABS` / `TRG` / `PAT` / `JURY`, blank
-  or anything else = available) and the outstanding **tasks**. Drag chips and tasks into a
-  **10-row team table**; each team row holds one task and its technicians, with two
-  placeholder slots and a "needs 2" flag until at least two technicians are dropped in.
-  Dragging a chip/task back to the rail (or its × button) frees it. The plan is saved per
-  date; an unavailable technician is refused.
+  or anything else = available) and the **task backlog**. Tasks are **real pending entries**
+  an admin has moved to *Reviewed* (highest priority first, capped at 60 in the rail — the
+  header shows `shown of total`). Drag chips and tasks into a **10-row team table**; each
+  team row holds one task and its technicians, with two placeholder slots and a "needs 2"
+  flag until at least two technicians are dropped in. Dragging a chip/task back to the rail
+  (or its × button) frees it. The plan is saved per date; an unavailable technician is
+  refused. Scheduling a pending onto a team does not change its Submitted→Reviewed→Completed
+  status — that workflow is unchanged.
 - **Asset detail** — tabs for **Details**, **Service dates**, **HV history**, **Stat history**,
   **Retrofits**, **Blades**, **Components**, **History** and **Pendings**, with **‹ ›**
   previous/next-turbine buttons in the header that step through the register alphabetically
@@ -146,7 +149,6 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   - *History* — the work-order log (date, description, work type, service order, technicians)
     from the *SCOTT & STUART 2026* tab of the **Job Request** workbook — ~1,600 entries across
     the 96 turbines; site-wide rows (no turbine) are skipped. Filterable by work type.
-    Any current scheduled/open jobs are listed above the log.
   - *Pendings* — ~570 open SGRE/SAP notifications imported from `Pendings.csv` (each with its
     WO number, priority and affected system; `CREA`→Submitted, `APR`→Reviewed). Flow is
     **Submitted → Reviewed → Completed**: an admin reviews (and may reserve parts — part
@@ -156,10 +158,11 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
 
 ## Data
 
-All content is seeded from **CSV exports of the source spreadsheets**, one file per tab, in
-`source/`. `seed_data.py` parses them on first run (`--reset` to re-seed after editing a CSV);
-nothing is needed at runtime once the DB is built. Dates in any of `YYYY-MM-DD`,
-`DD/MM/YYYY` or `Weekday, D Month YYYY` form are all accepted.
+**Every row in the database traces to one of the `source/*.csv` files** — there is no
+hand-written sample data. `seed_data.py` parses the CSVs on first run (`--reset` to re-seed
+after editing a CSV); nothing is needed at runtime once the DB is built. Dates in any of
+`YYYY-MM-DD`, `DD/MM/YYYY` or `Weekday, D Month YYYY` form are all accepted. The planning
+board's task backlog is drawn straight from the imported pending entries.
 
 | `source/` file | feeds |
 |---|---|
