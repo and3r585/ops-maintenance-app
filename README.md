@@ -45,17 +45,17 @@ Use a host that runs a real process:
 2. Render reads [`render.yaml`](render.yaml), builds (nothing to install) and starts `python app.py`.
 3. Log in with `admin` and the generated `ADMIN_PASSWORD` (Environment tab of the service).
 
-⚠️ The default is Render's **free** plan, which has an **ephemeral filesystem**: the whole
-container (including `data/app.db`) is wiped on every restart *and every deploy*. With
-`autoDeploy: true`, each push to `main` redeploys and wipes it — so a pending a technician
-adds today is gone the next time the service restarts. The ~570 imported pendings and all
-other seed data re-appear from `source/*.csv` on each cold start (~1s), but **app-entered
-data does not**.
+[`render.yaml`](render.yaml) is configured for **durable storage**: the `starter` plan with a
+1 GB persistent disk mounted at `/var/data`, and `DATA_DIR=/var/data` so `app.db` and uploaded
+photos live on that disk. Pending entries, completion evidence and in-app date edits **survive
+restarts and deploys**. The ~570 imported pendings seed once from `source/*.csv` on the first
+boot and are then left alone.
 
-To keep app-entered data on Render, switch to a paid plan with a persistent disk: uncomment
-the `plan: starter` + `disk:` + `DATA_DIR` block at the bottom of [`render.yaml`](render.yaml)
-and redeploy. That mounts a real volume at `/var/data` and points `$DATA_DIR` at it, so
-`app.db` and uploaded photos survive restarts and deploys.
+Cost: `starter` is ~$7/mo plus ~$0.25/GB-mo for the disk. A service with a disk runs a single
+instance and skips Render's zero-downtime deploys (a few seconds' blip per deploy).
+
+To run free instead (and lose all app-entered data on every restart/deploy): set `plan: free`
+in `render.yaml` and remove the `disk:` block and the `DATA_DIR` env var.
 
 Railway / Fly.io / a small VPS work the same way — run `python app.py`, give it a volume for
 `$DATA_DIR`.
