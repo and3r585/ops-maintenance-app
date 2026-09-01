@@ -1540,10 +1540,18 @@ def main():
 
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
+    fresh = not os.path.exists(DB_PATH)
     if args.reset and os.path.exists(DB_PATH):
         os.remove(DB_PATH)
-        print("  data reset")
+        fresh = True
+        print("  !! --reset: wiped data/app.db (all app-entered pendings and edits gone)")
     seed()
+
+    conn = get_db()
+    n_pend = conn.execute("SELECT COUNT(*) c FROM pending_entries").fetchone()["c"]
+    n_app = conn.execute("SELECT COUNT(*) c FROM pending_entries WHERE wo_code IS NULL").fetchone()["c"]
+    n_edits = conn.execute("SELECT COUNT(*) c FROM record_changes").fetchone()["c"]
+    conn.close()
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     url = "http://%s:%d" % ("localhost" if args.host in ("127.0.0.1", "0.0.0.0") else args.host, args.port)
@@ -1552,6 +1560,11 @@ def main():
     print("  running at   %s" % url)
     print("  logins       from source/Credentials.csv (synced each start)")
     print("  break-glass  admin / %s" % (os.environ.get("ADMIN_PASSWORD") or "admin123"))
+    print("  database     %s  (%s)" % (DB_PATH, "freshly seeded" if fresh else "existing, kept"))
+    print("  contents     %d pending entries (%d added in-app), %d logged record edits"
+          % (n_pend, n_app, n_edits))
+    print("  note         app-entered data lives in data/ — plain `python3 app.py` keeps it;")
+    print("               `--reset` deletes it. Nothing else wipes the DB.")
     print("  stop         Ctrl-C\n")
     try:
         httpd.serve_forever()

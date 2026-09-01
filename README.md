@@ -14,10 +14,25 @@ Then open http://localhost:8000
 
 ```bash
 python3 app.py --port 9000   # different port
-python3 app.py --reset       # wipe data/ and reseed
+python3 app.py --reset       # DESTRUCTIVE: delete data/ and re-seed from source/*.csv
 ```
 
-Data (SQLite DB + uploaded photos) lives in `data/` (or `$DATA_DIR`). Delete it to start fresh.
+### Where your data lives
+
+Everything entered *through the app* — pending entries, completion photos/comments, dates
+added or edited in Asset Information or the Data Explorer — is written to the SQLite file
+`data/app.db` (or `$DATA_DIR/app.db`). It **persists across restarts**: plain `python3 app.py`
+keeps it, and re-seeding only fills tables that are still empty, so your entries are never
+touched.
+
+The **only** things that wipe it:
+- `python3 app.py --reset` (deletes `data/` on purpose)
+- deleting `data/` yourself
+- a host with an **ephemeral filesystem** (see Render note below)
+
+The startup banner prints the DB path, whether it was kept or freshly seeded, and how many
+pending entries / logged edits it holds — check it if you think something didn't save.
+
 The server honours `$PORT` and `$HOST` when set (binds `0.0.0.0` on a host).
 
 ## Deploy (Render)
@@ -30,10 +45,17 @@ Use a host that runs a real process:
 2. Render reads [`render.yaml`](render.yaml), builds (nothing to install) and starts `python app.py`.
 3. Log in with `admin` and the generated `ADMIN_PASSWORD` (Environment tab of the service).
 
-The default is Render's **free** plan: fully working, but the disk is wiped on every restart,
-so pending entries / photos added *through the app* don't survive a restart (the ~570 imported
-pendings and everything else re-seed from `source/*.csv` on each cold start). For durable
-storage, uncomment the paid `plan` + `disk` + `DATA_DIR` block in `render.yaml`.
+⚠️ The default is Render's **free** plan, which has an **ephemeral filesystem**: the whole
+container (including `data/app.db`) is wiped on every restart *and every deploy*. With
+`autoDeploy: true`, each push to `main` redeploys and wipes it — so a pending a technician
+adds today is gone the next time the service restarts. The ~570 imported pendings and all
+other seed data re-appear from `source/*.csv` on each cold start (~1s), but **app-entered
+data does not**.
+
+To keep app-entered data on Render, switch to a paid plan with a persistent disk: uncomment
+the `plan: starter` + `disk:` + `DATA_DIR` block at the bottom of [`render.yaml`](render.yaml)
+and redeploy. That mounts a real volume at `/var/data` and points `$DATA_DIR` at it, so
+`app.db` and uploaded photos survive restarts and deploys.
 
 Railway / Fly.io / a small VPS work the same way — run `python app.py`, give it a volume for
 `$DATA_DIR`.
