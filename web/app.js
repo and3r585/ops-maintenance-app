@@ -82,6 +82,157 @@ function lightbox(src) {
 
 function navigate(hash) { window.location.hash = hash; }
 
+/* ---------- shared pending-entry card + workflow ---------- */
+const PENDING_STATUSES = ["SUBMITTED", "REVIEWED", "COMPLETED"];
+const cap = (s) => s ? s[0] + s.slice(1).toLowerCase() : s;
+
+function pendingItem(p, opts) {
+  opts = opts || {};
+  const isAdmin = State.user.role === "ADMIN";
+  const reload = opts.onChange || (() => {});
+  const notePhotos = (p.photos || []).filter(x => x.kind !== "evidence");
+  const evidence = (p.photos || []).filter(x => x.kind === "evidence");
+
+  const meta = [];
+  if (opts.showTurbine && p.turbine) {
+    meta.push(p.asset_id
+      ? h("a", { href: "#/asset/" + p.asset_id + "?tab=Pendings", class: "wo-so" }, p.turbine)
+      : h("span", { class: "wo-so" }, p.turbine));
+  }
+  if (p.wo_code) meta.push(h("span", { class: "wo-so" }, "WO " + p.wo_code));
+  if (p.priority != null) meta.push(h("span", { class: "pri-tag p" + p.priority }, "Priority " + p.priority));
+  if (p.system) meta.push(h("span", {}, p.system));
+
+  const card = h("div", { class: "pending" },
+    h("div", { class: "head" },
+      h("b", {}, p.author_name || "—"), "·", fmtWhen(p.created_at), badge(p.status)),
+    meta.length ? h("div", { class: "pending-meta" }, ...meta) : null,
+    h("div", { style: "white-space:pre-line" }, esc(p.note)),
+    notePhotos.length ? h("div", { class: "photos" }, ...notePhotos.map(ph =>
+      h("img", { src: ph.url, alt: "photo", loading: "lazy", onclick: () => lightbox(ph.url) }))) : null);
+
+  // parts reservation
+  if ((p.parts && p.parts.length) || p.parts_service_order) {
+    card.append(h("div", { class: "parts-box" },
+      h("div", { class: "parts-title" }, "Parts reserved",
+        p.parts_service_order ? h("span", { class: "wo-so" }, "SO " + p.parts_service_order) : null),
+      h("div", { class: "parts-list" },
+        ...(p.parts || []).map(pt => h("div", { class: "part-line" },
+          h("span", { class: "pl-num" }, esc(pt.part_number)),
+          h("span", { class: "pl-qty" }, "×" + esc(pt.quantity)))))));
+  }
+
+  // completion evidence
+  if (p.status === "COMPLETED") {
+    card.append(h("div", { class: "evidence-box" },
+      h("div", { class: "parts-title" }, "Completed",
+        h("span", { class: "hint" }, (p.completed_by_name || "") +
+          (p.completed_at ? " · " + fmtWhen(p.completed_at) : ""))),
+      p.completed_note ? h("div", { style: "white-space:pre-line" }, esc(p.completed_note)) : null,
+      evidence.length ? h("div", { class: "photos" }, ...evidence.map(ph =>
+        h("img", { src: ph.url, alt: "evidence", loading: "lazy", onclick: () => lightbox(ph.url) }))) : null));
+  }
+
+  // actions
+  const acts = h("div", { class: "btn-row", style: "margin-top:.7rem" });
+  if (p.status === "SUBMITTED" && isAdmin) {
+    acts.append(h("button", { class: "btn sm primary", onclick: () => patchStatus("REVIEWED") }, "Mark reviewed"));
+  }
+  if (p.status === "REVIEWED") {
+    if (isAdmin) {
+      acts.append(h("button", { class: "btn sm", onclick: () => card.append(partsForm()) },
+        (p.parts && p.parts.length ? "Edit parts reserved" : "Parts reserved")));
+      acts.append(h("button", { class: "btn sm ghost", onclick: () => patchStatus("SUBMITTED") }, "Revert to submitted"));
+    }
+    acts.append(h("button", { class: "btn sm primary", onclick: () => card.append(completeForm()) }, "Complete"));
+  }
+  if (p.status === "COMPLETED" && isAdmin) {
+    acts.append(h("button", { class: "btn sm ghost", onclick: () => patchStatus("REVIEWED") }, "Reopen"));
+  }
+  if (acts.children.length) card.append(acts);
+  return card;
+
+  async function patchStatus(status) {
+    try {
+      await api("/pendings/" + p.id, { method: "PATCH", body: { status } });
+      toast("Marked " + cap(status)); reload();
+    } catch (e) { toast(e.message, true); }
+  }
+
+  function partsForm() {
+    const box = h("div", { class: "inline-form" });
+    const rows = h("div", {});
+    const soInput = h("input", { placeholder: "Service order number", value: p.parts_service_order || "" });
+    const addRow = (pn = "", qty = "") => {
+      const r = h("div", { class: "part-row" },
+        h("input", { placeholder: "Part number", value: pn, class: "pn" }),
+        h("input", { placeholder: "Qty", value: qty, class: "qty" }),
+        h("button", { class: "icon-btn", type: "button", onclick: () => r.remove() }, "×"));
+      rows.append(r);
+    };
+    (p.parts && p.parts.length ? p.parts : [{}, {}]).forEach(pt => addRow(pt.part_number || "", pt.quantity || ""));
+    const err = h("div", { class: "form-error" });
+    box.append(
+      h("label", {}, "Parts to reserve"),
+      rows,
+      h("button", { class: "btn sm ghost", type: "button", onclick: () => addRow() }, "+ Add part"),
+      h("div", { class: "field", style: "margin-top:.6rem" }, h("label", {}, "Service order"), soInput),
+      err,
+      h("div", { class: "btn-row" },
+        h("button", { class: "btn sm primary", type: "button", onclick: save }, "Save reservation"),
+        h("button", { class: "btn sm ghost", type: "button", onclick: () => box.remove() }, "Cancel")));
+    return box;
+    async function save() {
+      const list = [...rows.querySelectorAll(".part-row")].map(r => ({
+        part_number: r.querySelector(".pn").value.trim(),
+        quantity: r.querySelector(".qty").value.trim(),
+      })).filter(x => x.part_number);
+      if (!list.length) { err.textContent = "Add at least one part number."; return; }
+      try {
+        await api("/pendings/" + p.id + "/parts", { method: "POST",
+          body: { service_order: soInput.value.trim(), parts: list } });
+        toast("Parts reserved"); reload();
+      } catch (e) { err.textContent = e.message; }
+    }
+  }
+
+  function completeForm() {
+    const box = h("div", { class: "inline-form" });
+    const comment = h("textarea", { placeholder: "What was done — evidence of completion…", required: true });
+    const fileIn = h("input", { type: "file", accept: "image/*", multiple: true, capture: "environment" });
+    const preview = h("div", { class: "thumbs-preview" });
+    const err = h("div", { class: "form-error" });
+    fileIn.addEventListener("change", () => {
+      clear(preview);
+      [...fileIn.files].slice(0, 8).forEach(f => {
+        const img = h("img", {}); const rd = new FileReader();
+        rd.onload = () => img.src = rd.result; rd.readAsDataURL(f); preview.append(img);
+      });
+    });
+    box.append(
+      h("label", {}, "Completion comment (required)"), comment,
+      h("div", { class: "field", style: "margin-top:.5rem" },
+        h("label", {}, "Evidence photo (required)"), fileIn,
+        h("div", { class: "hint" }, "At least one photo. On a phone this opens the camera."), preview),
+      err,
+      h("div", { class: "btn-row" },
+        h("button", { class: "btn sm primary", type: "button", onclick: submit }, "Mark completed"),
+        h("button", { class: "btn sm ghost", type: "button", onclick: () => box.remove() }, "Cancel")));
+    return box;
+    async function submit() {
+      if (!comment.value.trim()) { err.textContent = "A completion comment is required."; return; }
+      if (!fileIn.files.length) { err.textContent = "At least one evidence photo is required."; return; }
+      const fd = new FormData();
+      fd.append("comment", comment.value.trim());
+      [...fileIn.files].slice(0, 8).forEach(f => fd.append("photos", f));
+      try {
+        await api("/pendings/" + p.id + "/complete", { method: "POST", form: fd });
+        toast("Pending completed"); reload();
+      } catch (e) { err.textContent = e.message; }
+    }
+  }
+}
+
 /* ---------- auth ---------- */
 async function login(username, password) {
   const data = await api("/auth/login", { method: "POST", body: { username, password } });
@@ -197,46 +348,35 @@ async function viewDashboard() {
 
   const daysAway = (iso) => Math.round((new Date(iso) - new Date()) / 86400000);
 
-  const pendCard = h("div", { class: "card kpi" },
-    h("div", { class: "kpi-num" }, d.open_pendings),
-    h("div", { class: "kpi-label" }, "Open pending entries"),
-    h("div", { class: "kpi-sub" },
-      Object.entries(d.pendings_by_status || {})
-        .map(([s, c]) => `${c} ${s.toLowerCase()}`).join(" · ") || "None"));
+  const kpi = (num, label, sub, route) => h("div", {
+    class: "card kpi clickable", onclick: () => navigate(route),
+    title: "Open full list",
+  }, h("div", { class: "kpi-num" }, num),
+     h("div", { class: "kpi-label" }, label),
+     h("div", { class: "kpi-sub" }, sub),
+     h("div", { class: "kpi-more" }, "View list →"));
 
-  const retroTotal = d.incomplete_retrofit_count;
-  const retroCard = h("div", { class: "card kpi" },
-    h("div", { class: "kpi-num" }, retroTotal),
-    h("div", { class: "kpi-label" }, "Retrofit items not completed"),
-    h("div", { class: "kpi-sub" }, `${(d.incomplete_retrofits || []).length} campaigns affected`));
+  const pendCard = kpi(d.open_pendings, "Open pending entries",
+    Object.entries(d.pendings_by_status || {})
+      .map(([s, c]) => `${c} ${s.toLowerCase()}`).join(" · ") || "None", "#/pendings");
+  const svcCard = kpi(d.service_count, "Turbines with a next-service date",
+    d.next_services[0] ? "Next: " + d.next_services[0].tag + " on " + fmtDate(d.next_services[0].due) : "—",
+    "#/services");
+  const retroCard = kpi(d.incomplete_retrofit_count, "Retrofit items not completed",
+    `${(d.incomplete_retrofits || []).length} campaigns affected`, "#/retrofits");
 
-  const svcCard = h("div", { class: "card kpi" },
-    h("div", { class: "kpi-num" }, d.service_count),
-    h("div", { class: "kpi-label" }, "Turbines with a next-service date"),
-    h("div", { class: "kpi-sub" }, d.next_services[0]
-      ? "Next: " + d.next_services[0].tag + " on " + fmtDate(d.next_services[0].due) : "—"));
-
-  const svcList = h("div", { class: "card" }, h("h3", {}, "Next 10 service due dates"),
+  const svcList = h("div", { class: "card" },
+    h("h3", {}, "Next service due", h("a", { href: "#/services", class: "hint" }, "view all →")),
     h("p", { class: "hint", style: "margin:-.2rem 0 .6rem" }, "108-month service completion + 6 months."));
   if (!d.next_services.length) svcList.append(h("div", { class: "empty-state" }, "No service dates on record."));
-  else {
-    const list = h("div", { class: "rec-list" });
-    for (const s of d.next_services) {
-      const dd = daysAway(s.due);
-      list.append(h("div", { class: "rec-row", style: "cursor:pointer", onclick: () => navigate("#/assets") },
-        h("div", { class: "rec-name" }, s.tag,
-          h("span", { class: "hint", style: "margin-left:.5rem" },
-            dd < 0 ? `overdue ${-dd}d` : dd === 0 ? "today" : `in ${dd}d`)),
-        h("span", { class: "rec-date " + (dd < 0 ? "out" : dd <= 30 ? "wip" : "") }, fmtDate(s.due))));
-    }
-    svcList.append(list);
-  }
+  else svcList.append(serviceRows(d.next_services.slice(0, 10)));
 
-  const retroList = h("div", { class: "card" }, h("h3", {}, "Retrofits not completed"));
+  const retroList = h("div", { class: "card" },
+    h("h3", {}, "Retrofits not completed", h("a", { href: "#/retrofits", class: "hint" }, "view all →")));
   if (!d.incomplete_retrofits.length) retroList.append(h("div", { class: "empty-state" }, "All retrofits complete."));
   else {
     const list = h("div", { class: "rec-list" });
-    for (const g of d.incomplete_retrofits) {
+    for (const g of d.incomplete_retrofits.slice(0, 8)) {
       const out = g.outstanding || [], wip = g.in_progress || [];
       list.append(h("div", { class: "rec-row", style: "align-items:flex-start" },
         h("div", { class: "rec-name" }, g.name,
@@ -260,6 +400,98 @@ async function viewDashboard() {
       exportBtn),
     h("div", { class: "kpi-row" }, pendCard, svcCard, retroCard),
     h("div", { class: "grid cols-2", style: "margin-top:1rem" }, svcList, retroList)));
+}
+
+function serviceRows(list) {
+  const wrap = h("div", { class: "rec-list" });
+  const daysAway = (iso) => Math.round((new Date(iso) - new Date()) / 86400000);
+  for (const s of list) {
+    const dd = daysAway(s.due);
+    wrap.append(h("div", { class: "rec-row", style: "cursor:pointer",
+      onclick: () => navigate("#/assets?q=" + s.tag) },
+      h("div", { class: "rec-name" }, s.tag,
+        h("span", { class: "hint", style: "margin-left:.5rem" },
+          dd < 0 ? `overdue ${-dd}d` : dd === 0 ? "today" : `in ${dd}d`)),
+      h("span", { class: "rec-date " + (dd < 0 ? "out" : dd <= 30 ? "wip" : "") }, fmtDate(s.due))));
+  }
+  return wrap;
+}
+
+/* ---------- dashboard drill-downs ---------- */
+async function viewPendingsList() {
+  if (State.user.role !== "ADMIN") { navigate("#/home"); return; }
+  loading();
+  const want = decodeURIComponent((location.hash.split("?status=")[1] || "")).toUpperCase();
+  let data;
+  try { data = await api("/pendings" + (want ? "?status=" + want : "")); }
+  catch (e) { return renderError(e); }
+
+  const counts = { SUBMITTED: 0, REVIEWED: 0, COMPLETED: 0 };
+  data.pendings.forEach(p => counts[p.status] = (counts[p.status] || 0) + 1);
+
+  const chip = (label, val) => h("button", {
+    class: "filter-chip" + ((want || "") === val ? " active" : ""),
+    onclick: () => navigate("#/pendings" + (val ? "?status=" + val : "")),
+  }, label);
+
+  const list = h("div", {});
+  const reload = () => viewPendingsList();
+  if (!data.pendings.length) list.append(h("div", { class: "empty-state" }, "No pending entries match."));
+  for (const p of data.pendings) list.append(pendingItem(p, { showTurbine: true, onChange: reload }));
+
+  root.replaceChildren(shell("dashboard",
+    h("div", { class: "crumb" }, h("a", { href: "#/dashboard" }, "← Dashboard")),
+    h("div", { class: "page-head" }, h("h1", {}, "Pending entries"),
+      h("p", { class: "sub" }, data.pendings.length + " shown")),
+    h("div", { class: "filter-row" },
+      chip("All", ""), chip(`Submitted (${counts.SUBMITTED})`, "SUBMITTED"),
+      chip(`Reviewed (${counts.REVIEWED})`, "REVIEWED"),
+      chip(`Completed (${counts.COMPLETED})`, "COMPLETED")),
+    list));
+}
+
+async function viewServicesList() {
+  if (State.user.role !== "ADMIN") { navigate("#/home"); return; }
+  loading();
+  let d;
+  try { d = await api("/dashboard"); }
+  catch (e) { return renderError(e); }
+  const card = h("div", { class: "card" },
+    h("h3", {}, "All turbines — next service due"),
+    h("p", { class: "hint", style: "margin:-.2rem 0 .6rem" },
+      d.next_services.length + " turbines · 108-month completion + 6 months, soonest first."));
+  card.append(d.next_services.length
+    ? serviceRows(d.next_services)
+    : h("div", { class: "empty-state" }, "No service dates on record."));
+  root.replaceChildren(shell("dashboard",
+    h("div", { class: "crumb" }, h("a", { href: "#/dashboard" }, "← Dashboard")),
+    h("div", { class: "page-head" }, h("h1", {}, "Service due dates")),
+    card));
+}
+
+async function viewRetrofitsList() {
+  if (State.user.role !== "ADMIN") { navigate("#/home"); return; }
+  loading();
+  let d;
+  try { d = await api("/dashboard"); }
+  catch (e) { return renderError(e); }
+  const wrap = h("div", {});
+  wrap.append(h("div", { class: "page-head" }, h("h1", {}, "Retrofits not completed"),
+    h("p", { class: "sub" }, `${d.incomplete_retrofit_count} items across ${d.incomplete_retrofits.length} campaigns`)));
+  for (const g of d.incomplete_retrofits) {
+    const out = g.outstanding || [], wip = g.in_progress || [];
+    const card = h("div", { class: "card" },
+      h("h3", {}, g.name, h("span", { class: "rec-date out" }, out.length + wip.length)));
+    if (out.length) card.append(h("div", { class: "retro-tags" },
+      h("span", { class: "state-label" }, "Outstanding"),
+      ...out.map(t => h("a", { href: "#/assets?q=" + t, class: "turb-tag" }, t))));
+    if (wip.length) card.append(h("div", { class: "retro-tags" },
+      h("span", { class: "state-label" }, "In progress"),
+      ...wip.map(t => h("a", { href: "#/assets?q=" + t, class: "turb-tag wip" }, t))));
+    wrap.append(card);
+  }
+  root.replaceChildren(shell("dashboard",
+    h("div", { class: "crumb" }, h("a", { href: "#/dashboard" }, "← Dashboard")), wrap));
 }
 
 async function exportPendings(btn) {
@@ -293,7 +525,8 @@ async function viewAssets() {
   try { assets = (await api("/assets")).assets; }
   catch (e) { return renderError(e); }
 
-  const search = h("input", { class: "search", placeholder: "Search turbine or location…", type: "search" });
+  const q0 = decodeURIComponent((location.hash.split("?q=")[1] || "").split("&")[0]);
+  const search = h("input", { class: "search", placeholder: "Search turbine or location…", type: "search", value: q0 });
   const locSel = h("select", {});
   const typeSel = h("select", {});
   locSel.append(h("option", { value: "" }, "All locations"),
@@ -558,37 +791,25 @@ async function viewAsset(id) {
     return wrap;
   }
 
+  async function reloadPendings() {
+    pendings = (await api("/assets/" + id + "/pendings")).pendings;
+    const btn = tabBar.querySelector('button[data-tab="Pendings"]');
+    if (btn) btn.textContent = `Pendings (${pendings.length})`;
+    drawTab();
+  }
+
   function pendingsPane() {
     const wrap = h("div", {});
     wrap.append(addPendingForm());
+    const open = pendings.filter(p => p.status !== "COMPLETED");
+    const done = pendings.filter(p => p.status === "COMPLETED");
     if (!pendings.length) {
       wrap.append(h("div", { class: "empty-state" }, "No pending entries yet. Add the first one above."));
     }
-    for (const p of pendings) {
-      const actions = isAdmin ? h("div", { class: "btn-row", style: "margin-top:.7rem" },
-        ...["SUBMITTED", "REVIEWED", "ACTIONED"].map(s =>
-          h("button", {
-            class: "btn sm" + (p.status === s ? " primary" : ""),
-            onclick: async () => {
-              try { await api("/pendings/" + p.id, { method: "PATCH", body: { status: s } });
-                p.status = s; drawTab(); toast("Pending marked " + s.toLowerCase());
-              } catch (e) { toast(e.message, true); }
-            }
-          }, s[0] + s.slice(1).toLowerCase()))) : null;
-
-      const meta = [];
-      if (p.wo_code) meta.push(h("span", { class: "wo-so" }, "WO " + p.wo_code));
-      if (p.priority != null) meta.push(h("span", { class: "pri-tag p" + p.priority }, "Priority " + p.priority));
-      if (p.system) meta.push(h("span", {}, p.system));
-
-      wrap.append(h("div", { class: "pending" },
-        h("div", { class: "head" },
-          h("b", {}, p.author_name), "·", fmtWhen(p.created_at), badge(p.status)),
-        meta.length ? h("div", { class: "pending-meta" }, ...meta) : null,
-        h("div", {}, esc(p.note)),
-        p.photos.length ? h("div", { class: "photos" }, ...p.photos.map(ph =>
-          h("img", { src: ph.url, alt: ph.caption || "photo", loading: "lazy", onclick: () => lightbox(ph.url) }))) : null,
-        actions));
+    for (const p of open) wrap.append(pendingItem(p, { onChange: reloadPendings }));
+    if (done.length) {
+      wrap.append(h("h3", { style: "margin:1.4rem 0 .6rem;color:var(--text-soft)" }, `Completed (${done.length})`));
+      for (const p of done) wrap.append(pendingItem(p, { onChange: reloadPendings }));
     }
     return wrap;
   }
@@ -616,10 +837,8 @@ async function viewAsset(id) {
       [...file.files].slice(0, 8).forEach(f => fd.append("photos", f));
       try {
         await api("/assets/" + id + "/pendings", { method: "POST", form: fd });
-        pendings = (await api("/assets/" + id + "/pendings")).pendings;
-        tabBar.querySelector('button[data-tab="Pendings"]').textContent = `Pendings (${pendings.length})`;
-        drawTab();
-        toast("Pending entry added");
+        await reloadPendings();
+        toast("Pending entry added — status Submitted");
       } catch (e2) {
         err.textContent = e2.message;
         btn.disabled = false; btn.textContent = "Submit pending entry";
@@ -627,6 +846,8 @@ async function viewAsset(id) {
     }});
     form.append(
       h("h3", {}, "Add a pending entry"),
+      h("p", { class: "hint", style: "margin:-.2rem 0 .7rem" },
+        "New entries start as Submitted. An admin reviews them; a technician then completes with a photo and comment."),
       h("div", { class: "field" }, h("label", {}, "Note"), note),
       h("div", { class: "field" }, h("label", {}, "Photos (optional)"), file,
         h("div", { class: "hint" }, "Up to 8 images. On a phone this opens the camera."), preview),
@@ -832,6 +1053,9 @@ async function render() {
     case "assets": return viewAssets();
     case "planning": return viewPlanning();
     case "dashboard": return viewDashboard();
+    case "pendings": return viewPendingsList();
+    case "services": return viewServicesList();
+    case "retrofits": return viewRetrofitsList();
     case "home":
     default: return viewHome();
   }
