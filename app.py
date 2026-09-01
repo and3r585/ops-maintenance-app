@@ -25,6 +25,7 @@ import secrets
 import sqlite3
 import sys
 import time
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -114,6 +115,21 @@ CREATE TABLE IF NOT EXISTS asset_records (
     status      TEXT,                   -- retrofits: 'complete' | 'in_progress' | 'outstanding'
     sort        INTEGER NOT NULL DEFAULT 0
 );
+
+-- Audit log of every edit to an asset_records row (drives the Data Explorer change report).
+CREATE TABLE IF NOT EXISTS record_changes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    record_id   INTEGER NOT NULL,
+    asset_id    INTEGER NOT NULL REFERENCES assets(id),
+    category    TEXT NOT NULL,
+    record_name TEXT NOT NULL,
+    field       TEXT NOT NULL,          -- 'occurred_on' | 'detail' | 'status'
+    old_value   TEXT,
+    new_value   TEXT,
+    changed_by  INTEGER REFERENCES users(id),
+    changed_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_record_changes_at ON record_changes(changed_at);
 
 -- Daily team plan: 10 team rows per date, each an (optional) job + its technicians.
 CREATE TABLE IF NOT EXISTS plan_team (
@@ -387,6 +403,7 @@ def seed():
             ("assets", "Asset Information", "TECHNICIAN", 10),
             ("planning", "Planning", "ADMIN", 20),
             ("dashboard", "Site Dashboard", "ADMIN", 5),
+            ("explorer", "Data Explorer", "ADMIN", 30),
         ]:
             conn.execute(
                 "INSERT INTO modules (key,name,enabled,min_role,sort) VALUES (?,?,1,?,?)",
@@ -431,6 +448,122 @@ def parse_multipart(body, boundary):
         else:
             fields[name] = content.decode("utf-8", "replace")
     return fields, files
+
+
+# ---------------------------------------------------------------------------
+# Data Explorer: bulk view/edit of asset_records + change reporting
+# ---------------------------------------------------------------------------
+
+# (key, label, editable value field on asset_records)
+EXPLORER_CATEGORIES = [
+    ("service",   "Service dates", "occurred_on"),
+    ("hv",        "HV history",    "occurred_on"),
+    ("stat",      "Stat history",  "occurred_on"),
+    ("retrofit",  "Retrofits",     "occurred_on"),
+    ("blade",     "Blades",        "occurred_on"),
+    ("component", "Components",     "detail"),
+]
+EXPLORER_LABEL = {k: lbl for k, lbl, _ in EXPLORER_CATEGORIES}
+EXPLORER_VALUE_FIELD = {k: vf for k, _l, vf in EXPLORER_CATEGORIES}
+
+
+def explorer_matrix(conn, category, value_field):
+    """Return (columns, {tag: {name: {id, value, status}}}) for one category."""
+    cols = [r["name"] for r in conn.execute(
+        "SELECT name, MIN(sort) s FROM asset_records WHERE category = ? "
+        "GROUP BY name ORDER BY s, name", (category,))]
+    recs = conn.execute(
+        "SELECT r.id, a.tag, r.name, r.occurred_on, r.detail, r.status "
+        "FROM asset_records r JOIN assets a ON a.id = r.asset_id "
+        "WHERE r.category = ? ORDER BY a.tag", (category,)).fetchall()
+    by_tag = {}
+    for r in recs:
+        by_tag.setdefault(r["tag"], {})[r["name"]] = {
+            "id": r["id"],
+            "value": r["occurred_on"] if value_field == "occurred_on" else r["detail"],
+            "status": r["status"],
+        }
+    return cols, by_tag
+
+
+def log_record_change(conn, rec, field, old, new, user_id):
+    conn.execute(
+        "INSERT INTO record_changes "
+        "(record_id, asset_id, category, record_name, field, old_value, new_value, changed_by, changed_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (rec["id"], rec["asset_id"], rec["category"], rec["name"], field,
+         old, new, user_id, now()),
+    )
+
+
+def _col_letter(n):
+    s = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def _xml_escape(v):
+    return (str(v).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def build_xlsx(sheets):
+    """sheets = [(name, rows)], rows = [[cell, ...]]. Returns .xlsx bytes (stdlib only)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        ct = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+              '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+              '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+              '<Default Extension="xml" ContentType="application/xml"/>',
+              '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>']
+        for i in range(len(sheets)):
+            ct.append('<Override PartName="/xl/worksheets/sheet%d.xml" '
+                      'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' % (i + 1))
+        ct.append('</Types>')
+        z.writestr("[Content_Types].xml", "".join(ct))
+
+        z.writestr("_rels/.rels",
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                   '<Relationship Id="rId1" '
+                   'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+                   'Target="xl/workbook.xml"/></Relationships>')
+
+        sheet_tags, rel_tags = [], []
+        for i, (name, _rows) in enumerate(sheets):
+            sid = i + 1
+            safe = _xml_escape(re.sub(r'[\[\]:*?/\\]', " ", name))[:31]
+            sheet_tags.append('<sheet name="%s" sheetId="%d" r:id="rId%d"/>' % (safe, sid, sid))
+            rel_tags.append('<Relationship Id="rId%d" '
+                            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+                            'Target="worksheets/sheet%d.xml"/>' % (sid, sid))
+        z.writestr("xl/workbook.xml",
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                   'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                   '<sheets>' + "".join(sheet_tags) + '</sheets></workbook>')
+        z.writestr("xl/_rels/workbook.xml.rels",
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                   + "".join(rel_tags) + '</Relationships>')
+
+        for i, (_name, rows) in enumerate(sheets):
+            xml = []
+            for r_idx, row in enumerate(rows, start=1):
+                cells = []
+                for c_idx, val in enumerate(row, start=1):
+                    if val is None or val == "":
+                        continue
+                    cells.append('<c r="%s%d" t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>'
+                                 % (_col_letter(c_idx), r_idx, _xml_escape(val)))
+                xml.append('<row r="%d">%s</row>' % (r_idx, "".join(cells)))
+            z.writestr("xl/worksheets/sheet%d.xml" % (i + 1),
+                       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                       '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                       '<sheetData>' + "".join(xml) + '</sheetData></worksheet>')
+    return buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -783,10 +916,10 @@ class Handler(BaseHTTPRequestHandler):
                 },
             }
 
-        # set / clear a service or blade record date (any authenticated user)
+        # set / clear a service, blade, hv or retrofit record date (any authenticated user)
         if len(parts) == 2 and parts[0] == "records" and method == "PATCH":
-            self._require(conn)
-            rec = conn.execute("SELECT category, status FROM asset_records WHERE id = ?", (parts[1],)).fetchone()
+            user = self._require(conn)
+            rec = conn.execute("SELECT * FROM asset_records WHERE id = ?", (parts[1],)).fetchone()
             if not rec:
                 raise ApiError(404, "Record not found")
             if rec["category"] not in ("service", "blade", "hv", "retrofit"):
@@ -801,13 +934,20 @@ class Handler(BaseHTTPRequestHandler):
                 if not (2005 <= y <= 2040):
                     raise ApiError(400, "Date out of range")
                 iso = raw
+            old = rec["occurred_on"]
             if rec["category"] == "retrofit":
                 # entering a date completes the retrofit; clearing it reopens it
                 new_status = "complete" if iso else "outstanding"
                 conn.execute("UPDATE asset_records SET occurred_on = ?, status = ? WHERE id = ?",
                              (iso, new_status, parts[1]))
+                if (old or None) != (iso or None):
+                    log_record_change(conn, rec, "occurred_on", old, iso, user["id"])
+                if rec["status"] != new_status:
+                    log_record_change(conn, rec, "status", rec["status"], new_status, user["id"])
                 return 200, {"ok": True, "occurred_on": iso, "status": new_status}
             conn.execute("UPDATE asset_records SET occurred_on = ? WHERE id = ?", (iso, parts[1]))
+            if (old or None) != (iso or None):
+                log_record_change(conn, rec, "occurred_on", old, iso, user["id"])
             return 200, {"ok": True, "occurred_on": iso}
 
         if len(parts) == 3 and parts[0] == "assets" and parts[2] == "pendings":
@@ -928,6 +1068,156 @@ class Handler(BaseHTTPRequestHandler):
                 (comment, user["id"], now(), parts[1]),
             )
             return 200, {"ok": True}
+
+        # --- data explorer (admin) ---
+        if parts == ["explorer", "categories"] and method == "GET":
+            self._require(conn, "ADMIN")
+            return 200, {"categories": [
+                {"key": k, "label": lbl, "value_field": vf}
+                for k, lbl, vf in EXPLORER_CATEGORIES]}
+
+        if parts == ["explorer", "matrix"] and method == "GET":
+            self._require(conn, "ADMIN")
+            cat = (query.get("category", [""])[0] or "").strip()
+            if cat not in EXPLORER_VALUE_FIELD:
+                raise ApiError(404, "Unknown category")
+            vf = EXPLORER_VALUE_FIELD[cat]
+            cols, by_tag = explorer_matrix(conn, cat, vf)
+            rows = [{"tag": tag, "cells": [by_tag[tag].get(n) for n in cols]}
+                    for tag in sorted(by_tag)]
+            return 200, {"category": cat, "label": EXPLORER_LABEL[cat],
+                         "value_field": vf, "columns": cols, "rows": rows}
+
+        if parts == ["explorer", "export"] and method == "GET":
+            self._require(conn, "ADMIN")
+            cat = (query.get("category", [""])[0] or "").strip()
+            if cat not in EXPLORER_VALUE_FIELD:
+                raise ApiError(404, "Unknown category")
+            vf = EXPLORER_VALUE_FIELD[cat]
+            cols, by_tag = explorer_matrix(conn, cat, vf)
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow(["Turbine"] + cols)
+            for tag in sorted(by_tag):
+                line = [tag]
+                for n in cols:
+                    cell = by_tag[tag].get(n)
+                    val = (cell or {}).get("value")
+                    if not val and cell and cell.get("status") and cell["status"] != "complete":
+                        val = cell["status"]
+                    line.append(val or "")
+                w.writerow(line)
+            fname = "explorer-%s-%s.csv" % (cat, today())
+            return 200, RawResponse(buf.getvalue(), "text/csv; charset=utf-8", fname)
+
+        if parts == ["explorer", "apply"] and method == "POST":
+            user = self._require(conn, "ADMIN")
+            changes = self._json_body().get("changes") or []
+            applied, errors = 0, []
+            for ch in changes:
+                rid = ch.get("id")
+                rec = conn.execute("SELECT * FROM asset_records WHERE id = ?", (rid,)).fetchone()
+                if not rec:
+                    errors.append({"id": rid, "error": "Record not found"}); continue
+                if rec["category"] not in EXPLORER_VALUE_FIELD:
+                    errors.append({"id": rid, "error": "This record is not editable"}); continue
+                vf = EXPLORER_VALUE_FIELD[rec["category"]]
+                raw = ch.get("value")
+                raw = "" if raw is None else str(raw).strip()
+                if vf == "occurred_on":
+                    iso = None
+                    if raw:
+                        if not re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+                            errors.append({"id": rid, "error": "Date must be YYYY-MM-DD"}); continue
+                        if not (2005 <= int(raw[:4]) <= 2040):
+                            errors.append({"id": rid, "error": "Date out of range"}); continue
+                        iso = raw
+                    old = rec["occurred_on"]
+                    if (old or None) == (iso or None):
+                        continue
+                    if rec["category"] == "retrofit":
+                        new_status = "complete" if iso else "outstanding"
+                        conn.execute("UPDATE asset_records SET occurred_on=?, status=? WHERE id=?",
+                                     (iso, new_status, rid))
+                        if rec["status"] != new_status:
+                            log_record_change(conn, rec, "status", rec["status"], new_status, user["id"])
+                    else:
+                        conn.execute("UPDATE asset_records SET occurred_on=? WHERE id=?", (iso, rid))
+                    log_record_change(conn, rec, "occurred_on", old, iso, user["id"])
+                    applied += 1
+                else:
+                    new = raw or None
+                    old = rec["detail"]
+                    if (old or None) == (new or None):
+                        continue
+                    conn.execute("UPDATE asset_records SET detail=? WHERE id=?", (new, rid))
+                    log_record_change(conn, rec, "detail", old, new, user["id"])
+                    applied += 1
+            return 200, {"applied": applied, "errors": errors}
+
+        if parts == ["explorer", "changes"] and method == "GET":
+            self._require(conn, "ADMIN")
+            frm = (query.get("from", [""])[0] or "").strip()
+            to = (query.get("to", [""])[0] or "").strip()
+            for d in (frm, to):
+                if not re.match(r"^\d{4}-\d{2}-\d{2}$", d):
+                    raise ApiError(400, "from and to dates are required (YYYY-MM-DD)")
+            if frm > to:
+                frm, to = to, frm
+            FIELD_LABEL = {"occurred_on": "Date", "detail": "Detail", "status": "Status"}
+            crows = conn.execute(
+                "SELECT c.*, a.tag, u.display_name AS by_name FROM record_changes c "
+                "JOIN assets a ON a.id = c.asset_id "
+                "LEFT JOIN users u ON u.id = c.changed_by "
+                "WHERE substr(c.changed_at,1,10) BETWEEN ? AND ? "
+                "ORDER BY c.category, a.tag, c.changed_at", (frm, to)).fetchall()
+            by_cat = {}
+            for r in crows:
+                by_cat.setdefault(r["category"], []).append(r)
+            sheets = []
+            for key, label, _vf in EXPLORER_CATEGORIES:
+                rs = by_cat.get(key)
+                if not rs:
+                    continue
+                data = [["Turbine", "Record", "Field", "Previous value",
+                         "New value", "Changed by", "Changed at (UTC)"]]
+                for r in rs:
+                    data.append([
+                        r["tag"], r["record_name"],
+                        FIELD_LABEL.get(r["field"], r["field"]),
+                        r["old_value"] or "", r["new_value"] or "",
+                        r["by_name"] or "",
+                        (r["changed_at"] or "").replace("T", " ").rstrip("Z"),
+                    ])
+                sheets.append((label, data))
+            prows = conn.execute(
+                "SELECT a.tag, p.wo_code, p.status, p.note, p.created_at, "
+                "p.parts_reserved_at, p.completed_at, cu.display_name AS completed_by_name "
+                "FROM pending_entries p JOIN assets a ON a.id = p.asset_id "
+                "LEFT JOIN users cu ON cu.id = p.completed_by "
+                "WHERE substr(p.created_at,1,10) BETWEEN ? AND ? "
+                "   OR substr(COALESCE(p.parts_reserved_at,''),1,10) BETWEEN ? AND ? "
+                "   OR substr(COALESCE(p.completed_at,''),1,10) BETWEEN ? AND ? "
+                "ORDER BY a.tag, p.created_at",
+                (frm, to, frm, to, frm, to)).fetchall()
+            if prows:
+                data = [["Turbine", "WO code", "Status", "Created", "Parts reserved",
+                         "Completed", "Completed by", "Note"]]
+                for r in prows:
+                    data.append([
+                        r["tag"], r["wo_code"] or "", r["status"],
+                        (r["created_at"] or "")[:10], (r["parts_reserved_at"] or "")[:10],
+                        (r["completed_at"] or "")[:10], r["completed_by_name"] or "",
+                        (r["note"] or "").replace("\r\n", " ").replace("\n", " "),
+                    ])
+                sheets.append(("Pendings", data))
+            if not sheets:
+                raise ApiError(404, "No changes recorded between %s and %s" % (frm, to))
+            fname = "change-report-%s_to_%s.xlsx" % (frm, to)
+            return 200, RawResponse(
+                build_xlsx(sheets),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                fname)
 
         # --- jobs ---
         if parts == ["jobs"] and method == "GET":

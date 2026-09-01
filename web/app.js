@@ -67,6 +67,12 @@ const badge = (value) => h("span", { class: "badge dot b-" + value }, String(val
 const fmtDate = (s) => s ? new Date(s).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "—";
 const fmtWhen = (s) => s ? new Date(s).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
 const esc = (s) => String(s == null ? "" : s);
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const addDaysISO = (iso, days) => {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+};
 
 function toast(msg, isErr = false) {
   const t = h("div", { class: "toast" + (isErr ? " err" : "") }, msg);
@@ -251,7 +257,7 @@ async function logout(silent) {
 /* ================================================================
    Chrome
    ================================================================ */
-const MODULE_ROUTE = { assets: "#/assets", planning: "#/planning", dashboard: "#/dashboard" };
+const MODULE_ROUTE = { assets: "#/assets", planning: "#/planning", dashboard: "#/dashboard", explorer: "#/explorer" };
 function topbar(active) {
   const navItems = State.modules.map((m) =>
     h("a", {
@@ -327,7 +333,11 @@ function viewHome() {
       h("button", { class: "tile", onclick: () => navigate("#/planning") },
         h("span", { class: "ico" }, "📅"),
         h("h3", {}, "Planning"),
-        h("p", {}, "Build the day's team plan — drag available technicians and tasks into 10 team rows.")));
+        h("p", {}, "Build the day's team plan — drag available technicians and tasks into 10 team rows.")),
+      h("button", { class: "tile", onclick: () => navigate("#/explorer") },
+        h("span", { class: "ico" }, "🗃️"),
+        h("h3", {}, "Data Explorer"),
+        h("p", {}, "View every asset tab as one editable table, push approved changes to the database, and export a dated change report.")));
   }
   root.replaceChildren(shell("home",
     h("div", { class: "page-head" },
@@ -498,28 +508,199 @@ async function viewRetrofitsList() {
     h("div", { class: "crumb" }, h("a", { href: "#/dashboard" }, "← Dashboard")), wrap));
 }
 
-async function exportPendings(btn, status) {
+/* fetch a file endpoint with auth and hand it to the browser as a download */
+async function downloadFile(path, btn, okMsg, fallbackName) {
   const orig = btn.textContent;
-  btn.disabled = true; btn.textContent = "Exporting…";
+  btn.disabled = true; btn.textContent = "Preparing…";
   try {
-    const res = await fetch("/api/pendings/export" + (status ? "?status=" + status : ""), {
-      headers: { Authorization: "Bearer " + State.token },
-    });
-    if (!res.ok) throw new Error("Export failed (" + res.status + ")");
+    const res = await fetch("/api" + path, { headers: { Authorization: "Bearer " + State.token } });
+    if (!res.ok) {
+      let msg = "Download failed (" + res.status + ")";
+      try { const j = await res.json(); if (j && j.error) msg = j.error; } catch (_) {}
+      throw new Error(msg);
+    }
     const blob = await res.blob();
     const cd = res.headers.get("Content-Disposition") || "";
     const m = cd.match(/filename="([^"]+)"/);
-    const name = m ? m[1] : "pendings.csv";
+    const name = m ? m[1] : fallbackName;
     const url = URL.createObjectURL(blob);
     const a = h("a", { href: url, download: name });
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    toast("Pendings exported");
+    if (okMsg) toast(okMsg);
   } catch (e) {
     toast(e.message, true);
   } finally {
     btn.disabled = false; btn.textContent = orig;
   }
+}
+
+function exportPendings(btn, status) {
+  return downloadFile("/pendings/export" + (status ? "?status=" + status : ""),
+    btn, "Pendings exported", "pendings.csv");
+}
+
+/* ---------- data explorer (admin) ---------- */
+async function viewExplorer() {
+  if (State.user.role !== "ADMIN") { navigate("#/home"); return; }
+  loading();
+  let cats;
+  try { cats = (await api("/explorer/categories")).categories; }
+  catch (e) { return renderError(e); }
+
+  let activeCat = decodeURIComponent((location.hash.split("?cat=")[1] || "").split("&")[0])
+    || cats[0].key;
+  if (!cats.some(c => c.key === activeCat)) activeCat = cats[0].key;
+
+  const edits = new Map();           // record id -> { id, tag, name, field, oldValue, newValue }
+  const gridWrap = h("div", { class: "explorer-grid" });
+  const footer = h("div", { class: "explorer-bar", style: "display:none" });
+
+  const catTabs = h("div", { class: "filter-row" }, ...cats.map(c =>
+    h("button", {
+      class: "filter-chip" + (c.key === activeCat ? " active" : ""),
+      onclick: () => {
+        if (edits.size && !confirm("Discard " + edits.size + " unsaved change(s) and switch table?")) return;
+        activeCat = c.key; edits.clear();
+        window.location.hash = "#/explorer?cat=" + c.key;
+        loadGrid();
+      },
+    }, c.label)));
+
+  function refreshFooter() {
+    if (!edits.size) { footer.style.display = "none"; clear(footer); return; }
+    clear(footer);
+    footer.style.display = "flex";
+    footer.append(
+      h("span", { class: "explorer-bar-count" },
+        edits.size + " unsaved change" + (edits.size === 1 ? "" : "s")),
+      h("button", { class: "btn sm ghost", onclick: () => { edits.clear(); loadGrid(); } }, "Discard"),
+      h("button", { class: "btn sm primary", onclick: reviewChanges }, "Review & save"));
+  }
+
+  function reviewChanges() {
+    const list = [...edits.values()];
+    const rows = list.map(e => h("tr", {},
+      h("td", {}, e.tag),
+      h("td", {}, e.name),
+      h("td", { class: "old" }, e.oldValue || "—"),
+      h("td", {}, "→"),
+      h("td", { class: "new" }, e.newValue || "(cleared)")));
+    const table = h("table", { class: "review-table" },
+      h("thead", {}, h("tr", {},
+        h("th", {}, "Turbine"), h("th", {}, "Record"),
+        h("th", {}, "Was"), h("th", {}, ""), h("th", {}, "New"))),
+      h("tbody", {}, ...rows));
+    const saveBtn = h("button", { class: "btn primary" }, "Approve & save " + list.length);
+    const backdrop = h("div", { class: "modal-backdrop" });
+    const close = () => backdrop.remove();
+    saveBtn.onclick = async () => {
+      saveBtn.disabled = true; saveBtn.textContent = "Saving…";
+      try {
+        const r = await api("/explorer/apply", { method: "POST",
+          body: { changes: list.map(e => ({ id: e.id, value: e.newValue })) } });
+        close();
+        if (r.errors && r.errors.length)
+          toast(r.applied + " saved · " + r.errors.length + " rejected", true);
+        else toast(r.applied + " change" + (r.applied === 1 ? "" : "s") + " saved to the database");
+        edits.clear();
+        loadGrid();
+      } catch (e) {
+        saveBtn.disabled = false; saveBtn.textContent = "Approve & save " + list.length;
+        toast(e.message, true);
+      }
+    };
+    backdrop.append(h("div", { class: "modal" },
+      h("h3", {}, "Review changes"),
+      h("p", { class: "hint" }, "These edits will be written to the SQLite database and recorded in the change log."),
+      h("div", { class: "review-scroll" }, table),
+      h("div", { class: "btn-row", style: "justify-content:flex-end;margin-top:1rem" },
+        h("button", { class: "btn ghost", onclick: close }, "Cancel"), saveBtn)));
+    backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) close(); });
+    document.body.append(backdrop);
+  }
+
+  async function loadGrid() {
+    clear(gridWrap);
+    gridWrap.append(h("div", { class: "spinner" }, "Loading…"));
+    let data;
+    try { data = await api("/explorer/matrix?category=" + activeCat); }
+    catch (e) { clear(gridWrap); gridWrap.append(h("div", { class: "empty-state" }, e.message)); return; }
+    [...catTabs.children].forEach(b => b.classList.toggle("active", b.textContent === data.label));
+
+    const isDate = data.value_field === "occurred_on";
+    const table = h("table", { class: "explorer-table" });
+    table.append(h("thead", {}, h("tr", {},
+      h("th", { class: "sticky-col" }, "Turbine"),
+      ...data.columns.map(c => h("th", {}, c)))));
+    const tb = h("tbody", {});
+    for (const row of data.rows) {
+      const tr = h("tr", {});
+      tr.append(h("td", { class: "sticky-col" }, row.tag));
+      row.cells.forEach((cell, i) => {
+        const td = h("td", {});
+        if (!cell || !cell.id) { td.append(h("span", { class: "muted" }, "—")); tr.append(td); return; }
+        const name = data.columns[i];
+        const inp = h("input", {
+          type: isDate ? "date" : "text",
+          value: cell.value || "",
+          class: "explorer-cell",
+        });
+        if (!isDate) inp.placeholder = "—";
+        if (isDate && !cell.value && cell.status && cell.status !== "complete")
+          td.classList.add("cell-flagged");
+        inp.addEventListener("change", () => {
+          const nv = inp.value.trim();
+          const ov = cell.value || "";
+          if (nv === ov) { edits.delete(cell.id); td.classList.remove("cell-dirty"); }
+          else {
+            edits.set(cell.id, { id: cell.id, tag: row.tag, name,
+              oldValue: ov, newValue: nv });
+            td.classList.add("cell-dirty");
+          }
+          refreshFooter();
+        });
+        td.append(inp);
+        tr.append(td);
+      });
+      tb.append(tr);
+    }
+    table.append(tb);
+    clear(gridWrap);
+    gridWrap.append(table);
+    refreshFooter();
+  }
+
+  // --- change report panel ---
+  const to = h("input", { type: "date", value: todayISO() });
+  const from = h("input", { type: "date", value: addDaysISO(todayISO(), -30) });
+  const reportBtn = h("button", { class: "btn" }, "⭳ Download change report (XLSX)");
+  reportBtn.onclick = () => {
+    if (!from.value || !to.value) { toast("Pick a from and to date", true); return; }
+    downloadFile("/explorer/changes?from=" + from.value + "&to=" + to.value,
+      reportBtn, "Change report downloaded", "change-report.xlsx");
+  };
+  const exportBtn = h("button", { class: "btn sm" }, "⭳ Export this table (CSV)");
+  exportBtn.onclick = () => downloadFile("/explorer/export?category=" + activeCat,
+    exportBtn, "Table exported", "explorer.csv");
+
+  root.replaceChildren(shell("explorer",
+    h("div", { class: "page-head" },
+      h("h1", {}, "Data Explorer"),
+      h("p", { class: "sub" }, "Every asset tab as one table for all 96 turbines. Edit cells, review, then push approved changes to the database.")),
+    h("div", { class: "card" },
+      h("h3", {}, "Change report",
+        h("span", { class: "hint" }, "one worksheet per tab that changed in the window")),
+      h("p", { class: "hint", style: "margin:-.2rem 0 .7rem" },
+        "Queries the change log for every edit made between the two dates and returns an Excel workbook with a tab for each asset tab that was updated."),
+      h("div", { class: "toolbar" },
+        h("label", { style: "display:flex;align-items:center;gap:.4rem;font-weight:400" }, "From", from),
+        h("label", { style: "display:flex;align-items:center;gap:.4rem;font-weight:400" }, "To", to),
+        reportBtn)),
+    h("div", { class: "explorer-head" }, catTabs, exportBtn),
+    gridWrap,
+    footer));
+  loadGrid();
 }
 
 /* ---------- assets list ---------- */
@@ -1144,6 +1325,7 @@ async function render() {
     case "pendings": return viewPendingsList();
     case "services": return viewServicesList();
     case "retrofits": return viewRetrofitsList();
+    case "explorer": return viewExplorer();
     case "home":
     default: return viewHome();
   }

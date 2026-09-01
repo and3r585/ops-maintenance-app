@@ -55,7 +55,8 @@ Usernames are first-initial + surname, lowercase (`sclydesdale`, `scant`, `jgang
 ## What's built
 
 - **Login page** — username + password gate on the whole app.
-- **Role landing** — technicians get "View asset information"; admins additionally get "Planning".
+- **Role landing** — technicians get "View asset information"; admins additionally get
+  "Site dashboard", "Planning" and "Data Explorer".
 - **Asset register** — 96 turbines seeded from the *TURBINE* column of the *KGH 2025* tab
   of the KGH Virtual Whiteboard workbook, grouped by array (A–J). Searchable/filterable,
   with an open-pendings badge per turbine. No operational-status field on assets.
@@ -64,6 +65,18 @@ Usernames are first-initial + surname, lowercase (`sclydesdale`, `scant`, `jgang
 - **Site dashboard (admin)** — open pending-entry count (by status), the next 10 service due
   dates across the site (108-month + 6 months, soonest first), and every retrofit campaign
   still outstanding or in progress with the affected turbine counts.
+- **Data Explorer (admin)** — two tools in one page:
+  - *Bulk table* — pick any asset tab (Service dates, HV history, Stat history, Retrofits,
+    Blades, Components) and get one table with a row per turbine and a column per record.
+    Cells are editable inline; edits are staged and highlighted, then a **Review & save**
+    step shows every change as `was → new` before it is written to SQLite. Each save is
+    written to a `record_changes` audit log. **Export this table (CSV)** dumps the current
+    table as-is.
+  - *Change report* — pick a from/to date and download an **.xlsx workbook** with one
+    worksheet per asset tab that had any edit in that window (plus a Pendings sheet for
+    pending entries raised/reserved/completed in the window). Only tabs that actually
+    changed get a sheet. Edits made on an asset's own tab are captured here too, not just
+    Data Explorer ones.
 - **Planning board (admin)** — pick a date; the left rail shows **available technicians** as
   draggable chips (unavailable ones greyed with their reason, from the *Manplan 2025* day
   grid — unavailable = `HOL in WD` / `MED` / `SICK` / `ABS` / `TRG` / `PAT` / `JURY`, blank
