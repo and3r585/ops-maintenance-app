@@ -109,9 +109,7 @@ def _kgh2025(rows):
         (None, "126 Month Major Service"), (None, "132 Month Major Service"),
     ]
     BLADE = [
-        (57, "Blade drone inspection"), (49, "Blade stud reactive repairs"),
-        (50, "Blade A studs align & replace"), (51, "Blade B studs align & replace"),
-        (52, "Blade C studs align & replace"),
+        (57, "Blade drone inspection"),
     ]
     order, services, defects, blades = [], {}, {}, {}
     for row in rows[1:]:

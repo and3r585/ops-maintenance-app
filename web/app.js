@@ -389,15 +389,10 @@ async function viewDashboard() {
     retroList.append(list);
   }
 
-  const exportBtn = h("button", { class: "btn sm", onclick: () => exportPendings(exportBtn) },
-    "⭳ Export pendings (CSV)");
-
   root.replaceChildren(shell("dashboard",
-    h("div", { class: "page-head dash-head" },
-      h("div", {},
-        h("h1", {}, "Site dashboard"),
-        h("p", { class: "sub" }, "Kilgallioch — live figures across all 96 turbines.")),
-      exportBtn),
+    h("div", { class: "page-head" },
+      h("h1", {}, "Site dashboard"),
+      h("p", { class: "sub" }, "Kilgallioch — live figures across all 96 turbines.")),
     h("div", { class: "kpi-row" }, pendCard, svcCard, retroCard),
     h("div", { class: "grid cols-2", style: "margin-top:1rem" }, svcList, retroList)));
 }
@@ -426,13 +421,18 @@ async function viewPendingsList() {
   try { data = await api("/pendings" + (want ? "?status=" + want : "")); }
   catch (e) { return renderError(e); }
 
-  const counts = { SUBMITTED: 0, REVIEWED: 0, COMPLETED: 0 };
-  data.pendings.forEach(p => counts[p.status] = (counts[p.status] || 0) + 1);
+  const counts = data.counts || { SUBMITTED: 0, REVIEWED: 0, COMPLETED: 0 };
+  const total = counts.SUBMITTED + counts.REVIEWED + counts.COMPLETED;
 
   const chip = (label, val) => h("button", {
     class: "filter-chip" + ((want || "") === val ? " active" : ""),
     onclick: () => navigate("#/pendings" + (val ? "?status=" + val : "")),
   }, label);
+
+  const filterLabel = want ? want[0] + want.slice(1).toLowerCase() : "All";
+  const exportBtn = h("button", { class: "btn sm",
+    onclick: () => exportPendings(exportBtn, want) },
+    `⭳ Export ${filterLabel.toLowerCase()} (CSV)`);
 
   const list = h("div", {});
   const reload = () => viewPendingsList();
@@ -441,10 +441,14 @@ async function viewPendingsList() {
 
   root.replaceChildren(shell("dashboard",
     h("div", { class: "crumb" }, h("a", { href: "#/dashboard" }, "← Dashboard")),
-    h("div", { class: "page-head" }, h("h1", {}, "Pending entries"),
-      h("p", { class: "sub" }, data.pendings.length + " shown")),
+    h("div", { class: "page-head dash-head" },
+      h("div", {},
+        h("h1", {}, "Pending entries"),
+        h("p", { class: "sub" }, data.pendings.length + " shown"
+          + (want ? " of " + total : ""))),
+      exportBtn),
     h("div", { class: "filter-row" },
-      chip("All", ""), chip(`Submitted (${counts.SUBMITTED})`, "SUBMITTED"),
+      chip(`All (${total})`, ""), chip(`Submitted (${counts.SUBMITTED})`, "SUBMITTED"),
       chip(`Reviewed (${counts.REVIEWED})`, "REVIEWED"),
       chip(`Completed (${counts.COMPLETED})`, "COMPLETED")),
     list));
@@ -494,11 +498,11 @@ async function viewRetrofitsList() {
     h("div", { class: "crumb" }, h("a", { href: "#/dashboard" }, "← Dashboard")), wrap));
 }
 
-async function exportPendings(btn) {
+async function exportPendings(btn, status) {
   const orig = btn.textContent;
   btn.disabled = true; btn.textContent = "Exporting…";
   try {
-    const res = await fetch("/api/pendings/export", {
+    const res = await fetch("/api/pendings/export" + (status ? "?status=" + status : ""), {
       headers: { Authorization: "Bearer " + State.token },
     });
     if (!res.ok) throw new Error("Export failed (" + res.status + ")");
@@ -640,9 +644,9 @@ async function viewAsset(id) {
   function bladesPane() {
     const wrap = h("div", {});
     const blades = detail.blades || [];
-    const card = h("div", { class: "card" }, h("h3", {}, "Blade work"),
+    const card = h("div", { class: "card" }, h("h3", {}, "Blade inspection"),
       h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
-        "Drone inspection and blade-stud work from the KGH 2025 database. Add a date to record completed work."));
+        "Drone inspection date from the KGH 2025 database. Add a date to record a completed inspection."));
     if (!blades.length) card.append(h("div", { class: "empty-state" }, "No blade records for this turbine."));
     else {
       const list = h("div", { class: "rec-list" });

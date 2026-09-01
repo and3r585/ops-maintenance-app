@@ -82,8 +82,8 @@ Usernames are first-initial + surname, lowercase (`sclydesdale`, `scant`, `jgang
   - *Service dates* — service completion dates 72 → 132 month (72/84/90/96/102/108/114/120/126/132).
     72–114 seed from `KGH_2025.csv`; 120/126/132 have no source column yet. Any missing date
     shows a **＋ Add date** button that writes straight to SQLite (`PATCH /api/records/:id`).
-  - *Blades* — blade drone inspection (from `KGH_2025.csv`) plus blade-stud work, each with the
-    same **＋ Add date** editor; and a read-only blade-configuration summary (type + serials).
+  - *Blades* — blade drone inspection date (from `KGH_2025.csv`) with the same **＋ Add date**
+    editor, and a read-only blade-configuration summary (type + serials).
   - *HV history* — HV maintenance completion dates (2023 campaign, 2024/25 rephasing,
     2025/26), from `HV.csv`.
   - *Stat history* — annual and semi-annual statutory inspections plus the 10-year lift
@@ -99,9 +99,11 @@ Usernames are first-initial + surname, lowercase (`sclydesdale`, `scant`, `jgang
     the 96 turbines; site-wide rows (no turbine) are skipped. Filterable by work type.
     Any current scheduled/open jobs are listed above the log.
   - *Pendings* — ~570 open SGRE/SAP notifications imported from `Pendings.csv` (each with its
-    WO number, priority and affected system; `CREA`→Submitted, `APR`→Reviewed). Any user can
-    also add an entry (note + up to 8 photos); admins move entries Submitted → Reviewed →
-    Actioned.
+    WO number, priority and affected system; `CREA`→Submitted, `APR`→Reviewed). Flow is
+    **Submitted → Reviewed → Completed**: an admin reviews (and may reserve parts — part
+    numbers, quantities, service order); a technician completes with a mandatory comment +
+    evidence photo. The **#/pendings** list (from the dashboard) filters by status and its
+    **Export (CSV)** button exports exactly the current filter.
 
 ## Data
 

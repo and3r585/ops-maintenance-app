@@ -664,7 +664,10 @@ class Handler(BaseHTTPRequestHandler):
                 if ph["pending_entry_id"] in by_id:
                     by_id[ph["pending_entry_id"]]["photos"].append(
                         {"url": "/uploads/" + ph["filename"], "kind": ph["kind"]})
-            return 200, {"pendings": rows}
+            counts = {s: 0 for s in ("SUBMITTED", "REVIEWED", "COMPLETED")}
+            for r in conn.execute("SELECT status, COUNT(*) c FROM pending_entries GROUP BY status"):
+                counts[r["status"]] = r["c"]
+            return 200, {"pendings": rows, "counts": counts}
 
         # --- daily team plan ---
         if parts == ["plan"] and method == "GET":
@@ -806,29 +809,45 @@ class Handler(BaseHTTPRequestHandler):
         # --- pendings ---
         if parts == ["pendings", "export"] and method == "GET":
             self._require(conn, "ADMIN")
-            rows = conn.execute(
+            want = (query.get("status", [""])[0] or "").upper()
+            sql = (
                 "SELECT a.tag AS turbine, p.wo_code, p.priority, p.system, p.status, "
-                "u.display_name AS logged_by, p.created_at, p.note, "
-                "(SELECT COUNT(*) FROM pending_photos ph WHERE ph.pending_entry_id = p.id) AS photos "
+                "u.display_name AS logged_by, p.created_at, p.note, p.parts_service_order, "
+                "cu.display_name AS completed_by_name, p.completed_at, p.completed_note, "
+                "(SELECT COUNT(*) FROM pending_photos ph WHERE ph.pending_entry_id = p.id) AS photos, "
+                "(SELECT group_concat(part_number || ' x' || quantity, '; ') "
+                " FROM pending_parts pp WHERE pp.pending_entry_id = p.id) AS parts "
                 "FROM pending_entries p "
                 "JOIN assets a ON a.id = p.asset_id "
                 "JOIN users u ON u.id = p.author_id "
-                "ORDER BY a.tag, p.created_at, p.id"
-            ).fetchall()
+                "LEFT JOIN users cu ON cu.id = p.completed_by"
+            )
+            args = []
+            if want in ("SUBMITTED", "REVIEWED", "COMPLETED"):
+                sql += " WHERE p.status = ?"
+                args.append(want)
+            sql += " ORDER BY a.tag, p.created_at, p.id"
+            rows = conn.execute(sql, args).fetchall()
             buf = io.StringIO()
             w = csv.writer(buf)
-            w.writerow(["Turbine", "WO code", "Priority", "System", "Status",
-                        "Logged by", "Date", "Note", "Photos"])
+            w.writerow(["Turbine", "WO code", "Priority", "System", "Status", "Logged by",
+                        "Date", "Note", "Parts SO", "Parts", "Completed by",
+                        "Completed", "Completion note", "Photos"])
             for r in rows:
                 w.writerow([
                     r["turbine"], r["wo_code"] or "",
                     r["priority"] if r["priority"] is not None else "",
                     r["system"] or "", r["status"], r["logged_by"],
                     (r["created_at"] or "")[:10],
-                    (r["note"] or "").replace("\r\n", "\n"), r["photos"],
+                    (r["note"] or "").replace("\r\n", "\n"),
+                    r["parts_service_order"] or "", r["parts"] or "",
+                    r["completed_by_name"] or "", (r["completed_at"] or "")[:10],
+                    (r["completed_note"] or "").replace("\r\n", "\n"), r["photos"],
                 ])
-            return 200, RawResponse(buf.getvalue(), "text/csv; charset=utf-8",
-                                    "pendings-%s.csv" % today())
+            fname = "pendings-%s%s.csv" % (
+                (want.lower() + "-") if want in ("SUBMITTED", "REVIEWED", "COMPLETED") else "",
+                today())
+            return 200, RawResponse(buf.getvalue(), "text/csv; charset=utf-8", fname)
 
         # admin sets Submitted <-> Reviewed (and can reopen a Completed entry)
         if len(parts) == 2 and parts[0] == "pendings" and method == "PATCH":
