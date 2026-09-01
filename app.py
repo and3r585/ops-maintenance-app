@@ -312,6 +312,7 @@ def seed():
         add_records(data["stat"], "stat")
         add_records(data["retrofits"], "retrofit", with_status=True)
         add_records(data["components"], "component")
+        add_records(data["blades"], "blade")
 
     # --- technician roster (unavailable days): Manplan 2025.csv ---
     if conn.execute("SELECT COUNT(*) c FROM roster").fetchone()["c"] == 0:
@@ -745,7 +746,7 @@ class Handler(BaseHTTPRequestHandler):
                 (parts[1],),
             ).fetchall()
             recs = conn.execute(
-                "SELECT category, name, occurred_on AS date, detail, status FROM asset_records "
+                "SELECT id, category, name, occurred_on AS date, detail, status, sort FROM asset_records "
                 "WHERE asset_id = ? ORDER BY sort, name", (parts[1],),
             ).fetchall()
             history = conn.execute(
@@ -764,12 +765,34 @@ class Handler(BaseHTTPRequestHandler):
                 "stat": [dict(r) for r in recs if r["category"] == "stat"],
                 "retrofits": [dict(r) for r in recs if r["category"] == "retrofit"],
                 "components": [dict(r) for r in recs if r["category"] == "component"],
+                "blades": [dict(r) for r in recs if r["category"] == "blade"],
                 "history": [dict(r) for r in history],
                 "next_service": {
                     "base_108mo": s108,
                     "due": add_months(s108, 6) if s108 else None,
                 },
             }
+
+        # set / clear a service or blade record date (any authenticated user)
+        if len(parts) == 2 and parts[0] == "records" and method == "PATCH":
+            self._require(conn)
+            rec = conn.execute("SELECT category FROM asset_records WHERE id = ?", (parts[1],)).fetchone()
+            if not rec:
+                raise ApiError(404, "Record not found")
+            if rec["category"] not in ("service", "blade"):
+                raise ApiError(403, "Only service and blade dates are editable")
+            raw = (self._json_body().get("occurred_on") or "").strip()
+            iso = None
+            if raw:
+                m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", raw)
+                if not m:
+                    raise ApiError(400, "Date must be YYYY-MM-DD")
+                y = int(m.group(1))
+                if not (2005 <= y <= 2040):
+                    raise ApiError(400, "Date out of range")
+                iso = raw
+            conn.execute("UPDATE asset_records SET occurred_on = ? WHERE id = ?", (iso, parts[1]))
+            return 200, {"ok": True, "occurred_on": iso}
 
         if len(parts) == 3 and parts[0] == "assets" and parts[2] == "pendings":
             asset_id = parts[1]

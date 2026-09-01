@@ -73,14 +73,17 @@ Usernames are first-initial + surname, lowercase (`sclydesdale`, `scant`, `jgang
   Dragging a chip/task back to the rail (or its × button) frees it. The plan is saved per
   date; an unavailable technician is refused.
 - **Asset detail** — tabs for **Details**, **Service dates**, **HV history**, **Stat history**,
-  **Retrofits**, **Components**, **History** and **Pendings**.
+  **Retrofits**, **Blades**, **Components**, **History** and **Pendings**.
   - *Details* — **Identification** (turbine / type / location); an **Equipment** card;
     a **Defect / operational issue** card (KGH 2025 column G — highlighted when present);
     a **Next service due** card (108-month completion + 6 months, with a days-away / overdue
     indicator); and a **Condition monitoring (SMP)** box with gearbox / generator /
     main-bearing state and observations.
-  - *Service dates* — the seven major/minor service completion dates (72/84/90/96/102/108/114
-    month), from `KGH_2025.csv`.
+  - *Service dates* — service completion dates 72 → 132 month (72/84/90/96/102/108/114/120/126/132).
+    72–114 seed from `KGH_2025.csv`; 120/126/132 have no source column yet. Any missing date
+    shows a **＋ Add date** button that writes straight to SQLite (`PATCH /api/records/:id`).
+  - *Blades* — blade drone inspection (from `KGH_2025.csv`) plus blade-stud work, each with the
+    same **＋ Add date** editor; and a read-only blade-configuration summary (type + serials).
   - *HV history* — HV maintenance completion dates (2023 campaign, 2024/25 rephasing,
     2025/26), from `HV.csv`.
   - *Stat history* — annual and semi-annual statutory inspections plus the 10-year lift

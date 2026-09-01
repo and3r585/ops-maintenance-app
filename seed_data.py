@@ -98,26 +98,38 @@ def make_username(full, taken):
 # per-tab parsers  (each CSV has a single header row; data starts at row 1)
 # ---------------------------------------------------------------------------
 
-def _turbines_services_defects(rows):
-    """KGH_2025.csv -> (turbine order, {tag: [service recs]}, {tag: defect text})."""
+def _kgh2025(rows):
+    """KGH_2025.csv -> (turbine order, services, defects, blade records)."""
+    #  col (None = no source column yet -> always Null, date added in-app), name, sort
     SVC = [
         (9, "72 Month Major Service"), (13, "84 Month Major Service"),
         (19, "90 Month Major Service"), (25, "96 Month Major Service"),
         (30, "102 Month Minor Service"), (35, "108 Month Major Service"),
-        (41, "114 Month Major Service"),
+        (41, "114 Month Major Service"), (None, "120 Month Major Service"),
+        (None, "126 Month Major Service"), (None, "132 Month Major Service"),
     ]
-    order, services, defects = [], {}, {}
+    BLADE = [
+        (57, "Blade drone inspection"), (49, "Blade stud reactive repairs"),
+        (50, "Blade A studs align & replace"), (51, "Blade B studs align & replace"),
+        (52, "Blade C studs align & replace"),
+    ]
+    order, services, defects, blades = [], {}, {}, {}
     for row in rows[1:]:
         tag = norm_tag(_get(row, 0))
         if not tag:
             continue
         order.append(tag)
         services[tag] = [
-            {"name": nm, "date": parse_date(_get(row, ci)), "detail": None, "sort": si}
+            {"name": nm, "date": (parse_date(_get(row, ci)) if ci is not None else None),
+             "detail": None, "sort": si}
             for si, (ci, nm) in enumerate(SVC)
         ]
+        blades[tag] = [
+            {"name": nm, "date": parse_date(_get(row, ci)), "detail": None, "sort": si}
+            for si, (ci, nm) in enumerate(BLADE)
+        ]
         defects[tag] = clean(_get(row, 6))  # "Defects / Issues affecting work and/or operation"
-    return order, services, defects
+    return order, services, defects, blades
 
 
 def _hv(rows):
@@ -369,13 +381,14 @@ def _pendings(rows):
 # ---------------------------------------------------------------------------
 
 def load():
-    order, services, defects = _turbines_services_defects(_rows(FILES["kgh2025"]))
+    order, services, defects, blades = _kgh2025(_rows(FILES["kgh2025"]))
     names, roster = _manplan(_rows(FILES["manplan"]))
     return {
         "turbines": order,
         "technicians": names,
         "services": services,
         "defects": defects,
+        "blades": blades,
         "hv": _hv(_rows(FILES["hv"])),
         "stat": _stats(_rows(FILES["stats"])),
         "retrofits": _retrofits(_rows(FILES["retro"])),

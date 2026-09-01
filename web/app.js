@@ -577,7 +577,7 @@ async function viewAsset(id) {
   const isAdmin = State.user.role === "ADMIN";
 
   const tabWrap = h("div", {});
-  const tabs = ["Details", "Service dates", "HV history", "Stat history", "Retrofits", "Components", "History", "Pendings"];
+  const tabs = ["Details", "Service dates", "HV history", "Stat history", "Retrofits", "Blades", "Components", "History", "Pendings"];
   let activeTab = decodeURIComponent(location.hash.split("?tab=")[1] || "") || "Details";
   if (!tabs.includes(activeTab)) activeTab = "Details";
 
@@ -596,10 +596,77 @@ async function viewAsset(id) {
       "Completion dates from the Stats tab of the KGH Virtual Whiteboard.",
       detail.stat, "No statutory inspections recorded for this turbine."),
     "Retrofits": () => recordPane("retrofit", detail.retrofits, "No retrofits recorded for this turbine."),
+    "Blades": bladesPane,
     "Components": componentsPane,
     "History": historyPane,
     "Pendings": pendingsPane,
   };
+
+  /* editable date widget — shows the date, or an "Add date" button when null.
+     Any change is PATCHed to /records/:id and pushed to SQLite. */
+  function dateCell(rec, reload) {
+    if (!rec.id) return h("span", { class: "rec-date muted" }, "—");
+    const wrap = h("span", { class: "rec-date-edit" });
+    const render = () => {
+      clear(wrap);
+      if (rec.date) {
+        wrap.append(
+          h("span", { class: "rec-date" }, fmtDate(rec.date)),
+          h("button", { class: "date-edit-link", title: "Change date", onclick: openInput }, "edit"));
+      } else {
+        wrap.append(h("button", { class: "btn sm", onclick: openInput }, "＋ Add date"));
+      }
+    };
+    const openInput = () => {
+      clear(wrap);
+      const inp = h("input", { type: "date", value: rec.date || "", style: "width:auto" });
+      const save = async (val) => {
+        try {
+          const r = await api("/records/" + rec.id, { method: "PATCH", body: { occurred_on: val } });
+          rec.date = r.occurred_on;
+          toast(val ? "Date saved" : "Date cleared");
+          if (reload) reload(); else render();
+        } catch (e) { toast(e.message, true); render(); }
+      };
+      inp.addEventListener("change", () => save(inp.value));
+      wrap.append(inp, h("button", { class: "btn sm ghost", onclick: () => render() }, "Cancel"));
+      if (rec.date) wrap.append(h("button", { class: "btn sm ghost", onclick: () => save("") }, "Clear"));
+      inp.focus();
+    };
+    render();
+    return wrap;
+  }
+
+  function bladesPane() {
+    const wrap = h("div", {});
+    const blades = detail.blades || [];
+    const card = h("div", { class: "card" }, h("h3", {}, "Blade work"),
+      h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
+        "Drone inspection and blade-stud work from the KGH 2025 database. Add a date to record completed work."));
+    if (!blades.length) card.append(h("div", { class: "empty-state" }, "No blade records for this turbine."));
+    else {
+      const list = h("div", { class: "rec-list" });
+      for (const b of blades) {
+        list.append(h("div", { class: "rec-row" },
+          h("div", { class: "rec-name" }, b.name),
+          dateCell(b, drawTab)));
+      }
+      card.append(list);
+    }
+    wrap.append(card);
+
+    // read-only blade configuration from the traceability record
+    const comps = (detail.components || []).filter(c =>
+      /^Blade (type|[ABC] S\/N|bearing)/.test(c.name));
+    if (comps.length) {
+      const cfg = h("div", { class: "card" }, h("h3", {}, "Blade configuration"),
+        h("div", { class: "rec-list" }, ...comps.map(c => h("div", { class: "rec-row" },
+          h("div", { class: "rec-name" }, c.name),
+          h("span", { class: "rec-val" }, c.detail || "—")))));
+      wrap.append(cfg);
+    }
+    return wrap;
+  }
 
   function datePane(title, hint, records, emptyMsg) {
     records = (records || []).slice().sort((x, y) => String(y.date || "").localeCompare(String(x.date || "")));
@@ -695,7 +762,8 @@ async function viewAsset(id) {
       const done = records.filter(r => r.date).length;
       card.append(h("h3", {}, "Service completion dates"),
         h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
-          `${done} of ${records.length} services completed. Dates from the KGH 2025 whiteboard.`));
+          `${done} of ${records.length} services completed. Dates from the KGH 2025 database — `
+          + `add a date to record a completed service.`));
     } else {
       const nc = records.filter(r => r.status && r.status !== "complete").length;
       card.append(h("h3", {}, "Retrofit records"),
@@ -706,7 +774,9 @@ async function viewAsset(id) {
     const list = h("div", { class: "rec-list" });
     for (const r of records) {
       let right;
-      if (r.date) right = h("span", { class: "rec-date" }, fmtDate(r.date));
+      if (kind === "service") {
+        right = dateCell(r, drawTab);
+      } else if (r.date) right = h("span", { class: "rec-date" }, fmtDate(r.date));
       else if (r.status === "complete") right = h("span", { class: "rec-date" }, r.detail || "Completed");
       else if (r.status === "in_progress") right = h("span", { class: "rec-date wip" }, "In progress");
       else if (r.status === "outstanding") right = h("span", { class: "rec-date out" }, "Outstanding");

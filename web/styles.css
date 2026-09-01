@@ -533,3 +533,12 @@ textarea { resize: vertical; min-height: 90px; }
 .part-row .pn { flex: 1; }
 .part-row .qty { width: 70px; }
 .card > h3 { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+
+/* ---- editable date cell (service dates / blades) ---- */
+.rec-date-edit { display: inline-flex; align-items: center; gap: .4rem; flex-wrap: wrap; justify-content: flex-end; }
+.rec-date-edit input[type="date"] { font: inherit; padding: .3rem .45rem; }
+.date-edit-link {
+  border: none; background: none; cursor: pointer; font: inherit; font-size: .75rem;
+  color: var(--accent); text-decoration: underline; padding: 0;
+}
+.date-edit-link:hover { color: var(--accent-hover); }
