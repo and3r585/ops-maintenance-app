@@ -638,11 +638,21 @@ async function viewExplorer() {
         // no record row for this turbine/column -> leave the cell blank and non-editable
         if (!cell || !cell.id) { tr.append(td); return; }
         const name = data.columns[i];
-        const inp = h("input", {
-          type: isDate ? "date" : "text",
-          value: cell.value || "",         // blank in SQLite -> blank cell
-          class: "explorer-cell",
-        });
+        const inp = h("input", { class: "explorer-cell" });
+        inp.value = cell.value || "";     // blank in SQLite -> blank cell
+        if (isDate) {
+          // An empty <input type="date"> renders inconsistently across browsers
+          // (dd/mm/yyyy in some, *today's date* in others). Keep empty cells as a
+          // plain text box that shows nothing, and swap in the real date picker
+          // only while the cell is focused.
+          inp.type = inp.value ? "date" : "text";
+          inp.autocomplete = "off";
+          inp.addEventListener("focus", () => {
+            if (inp.type !== "date") inp.type = "date";
+            try { if (inp.showPicker) inp.showPicker(); } catch (_) {}
+          });
+          inp.addEventListener("blur", () => { if (!inp.value) inp.type = "text"; });
+        }
         inp.addEventListener("change", () => {
           const nv = inp.value.trim();
           const ov = cell.value || "";
