@@ -594,8 +594,9 @@ async function viewAsset(id) {
     "Details": detailsPane,
     "Service dates": () => recordPane("service", detail.services, "No service dates recorded for this turbine."),
     "HV history": () => datePane("HV maintenance history",
-      "Completion dates from the HV tab of the KGH Virtual Whiteboard.",
-      detail.hv, "No HV maintenance recorded for this turbine."),
+      "Completion dates from the HV tab of the KGH Virtual Whiteboard. The 2026/27 and 2027/28 "
+      + "campaigns have no source date yet — add one to record completion.",
+      detail.hv, "No HV maintenance recorded for this turbine.", true),
     "Stat history": () => datePane("Statutory inspection history",
       "Completion dates from the Stats tab of the KGH Virtual Whiteboard.",
       detail.stat, "No statutory inspections recorded for this turbine."),
@@ -628,6 +629,7 @@ async function viewAsset(id) {
         try {
           const r = await api("/records/" + rec.id, { method: "PATCH", body: { occurred_on: val } });
           rec.date = r.occurred_on;
+          if (r.status) rec.status = r.status;
           toast(val ? "Date saved" : "Date cleared");
           if (reload) reload(); else render();
         } catch (e) { toast(e.message, true); render(); }
@@ -672,7 +674,7 @@ async function viewAsset(id) {
     return wrap;
   }
 
-  function datePane(title, hint, records, emptyMsg) {
+  function datePane(title, hint, records, emptyMsg, editable) {
     records = (records || []).slice().sort((x, y) => String(y.date || "").localeCompare(String(x.date || "")));
     const done = records.filter(r => r.date).length;
     const card = h("div", { class: "card" }, h("h3", {}, title),
@@ -681,10 +683,11 @@ async function viewAsset(id) {
     if (!records.length) { card.append(h("div", { class: "empty-state" }, emptyMsg)); return card; }
     const list = h("div", { class: "rec-list" });
     for (const r of records) {
-      list.append(h("div", { class: "rec-row" },
-        h("div", { class: "rec-name" }, r.name),
-        r.date ? h("span", { class: "rec-date" }, fmtDate(r.date))
-               : h("span", { class: "rec-date muted" }, r.detail || "Not completed")));
+      let right;
+      if (editable && r.id) right = dateCell(r, drawTab);
+      else if (r.date) right = h("span", { class: "rec-date" }, fmtDate(r.date));
+      else right = h("span", { class: "rec-date muted" }, r.detail || "Not completed");
+      list.append(h("div", { class: "rec-row" }, h("div", { class: "rec-name" }, r.name), right));
     }
     card.append(list);
     return card;
@@ -769,7 +772,7 @@ async function viewAsset(id) {
           `${done} of ${records.length} services completed. Dates from the KGH 2025 database — `
           + `add a date to record a completed service.`));
     } else {
-      const nc = records.filter(r => r.status && r.status !== "complete").length;
+      const nc = records.filter(r => !r.date).length;
       card.append(h("h3", {}, "Retrofit records"),
         h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
           `${records.length} on record · ${nc} not completed. From the 25 KGH Retro whiteboard.`));
@@ -780,11 +783,13 @@ async function viewAsset(id) {
       let right;
       if (kind === "service") {
         right = dateCell(r, drawTab);
-      } else if (r.date) right = h("span", { class: "rec-date" }, fmtDate(r.date));
-      else if (r.status === "complete") right = h("span", { class: "rec-date" }, r.detail || "Completed");
-      else if (r.status === "in_progress") right = h("span", { class: "rec-date wip" }, "In progress");
-      else if (r.status === "outstanding") right = h("span", { class: "rec-date out" }, "Outstanding");
-      else right = h("span", { class: "rec-date muted" }, r.detail || "Not recorded");
+      } else if (r.id) {
+        // retrofit: status badge (when not already implied by a date) + the date/add-date control
+        const badge = !r.date && r.status === "in_progress" ? h("span", { class: "rec-date wip" }, "In progress")
+          : !r.date && r.status === "outstanding" ? h("span", { class: "rec-date out" }, "Outstanding")
+          : null;
+        right = h("span", { class: "rec-date-edit" }, badge, dateCell(r, drawTab));
+      } else right = h("span", { class: "rec-date muted" }, r.detail || "Not recorded");
       list.append(h("div", { class: "rec-row" }, h("div", { class: "rec-name" }, r.name), right));
     }
     card.append(list);
@@ -929,11 +934,20 @@ async function viewAsset(id) {
     return form;
   }
 
+  const goto = (target) => navigate("#/asset/" + target.id + "?tab=" + encodeURIComponent(activeTab));
+  const navBtns = h("div", { class: "asset-nav" },
+    h("button", { class: "icon-btn", title: "Previous: " + detail.prev.tag,
+      onclick: () => goto(detail.prev) }, "‹"),
+    h("button", { class: "icon-btn", title: "Next: " + detail.next.tag,
+      onclick: () => goto(detail.next) }, "›"));
+
   root.replaceChildren(shell("assets",
     h("div", { class: "crumb" }, h("a", { href: "#/assets" }, "← All assets")),
-    h("div", { class: "page-head" },
-      h("h1", {}, a.name === a.tag ? a.tag : a.tag + " — " + a.name),
-      h("p", { class: "sub" }, a.type + " · " + a.location)),
+    h("div", { class: "page-head asset-head" },
+      h("div", {},
+        h("h1", {}, a.name === a.tag ? a.tag : a.tag + " — " + a.name),
+        h("p", { class: "sub" }, a.type + " · " + a.location)),
+      navBtns),
     tabBar, tabWrap));
   drawTab();
 }

@@ -97,6 +97,9 @@ p { margin: 0 0 .8rem; }
 .content { flex: 1; width: 100%; max-width: 1120px; margin: 0 auto; padding: 1.6rem 1.1rem 4rem; }
 .page-head { margin-bottom: 1.2rem; }
 .page-head .sub { color: var(--text-soft); }
+.asset-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.asset-nav { display: flex; gap: .4rem; flex-shrink: 0; }
+.asset-nav .icon-btn { font-size: 1.3rem; line-height: 1; }
 .crumb { color: var(--text-soft); font-size: .85rem; margin-bottom: .6rem; }
 .crumb a { color: var(--text-soft); }
 

@@ -760,8 +760,15 @@ class Handler(BaseHTTPRequestHandler):
             services = [dict(r) for r in recs if r["category"] == "service"]
             s108 = next((s["date"] for s in services
                          if s["name"].startswith("108 Month") and s["date"]), None)
+            ordered = [r["id"] for r in conn.execute("SELECT id FROM assets ORDER BY tag")]
+            tag_by_id = {r["id"]: r["tag"] for r in conn.execute("SELECT id, tag FROM assets")}
+            idx = ordered.index(asset["id"])
+            prev_id = ordered[idx - 1] if idx > 0 else ordered[-1]
+            next_id = ordered[(idx + 1) % len(ordered)]
             return 200, {
                 "asset": dict(asset),
+                "prev": {"id": prev_id, "tag": tag_by_id[prev_id]},
+                "next": {"id": next_id, "tag": tag_by_id[next_id]},
                 "jobs": [dict(r) for r in jobs],
                 "services": services,
                 "hv": [dict(r) for r in recs if r["category"] == "hv"],
@@ -779,11 +786,11 @@ class Handler(BaseHTTPRequestHandler):
         # set / clear a service or blade record date (any authenticated user)
         if len(parts) == 2 and parts[0] == "records" and method == "PATCH":
             self._require(conn)
-            rec = conn.execute("SELECT category FROM asset_records WHERE id = ?", (parts[1],)).fetchone()
+            rec = conn.execute("SELECT category, status FROM asset_records WHERE id = ?", (parts[1],)).fetchone()
             if not rec:
                 raise ApiError(404, "Record not found")
-            if rec["category"] not in ("service", "blade"):
-                raise ApiError(403, "Only service and blade dates are editable")
+            if rec["category"] not in ("service", "blade", "hv", "retrofit"):
+                raise ApiError(403, "This record type is not editable")
             raw = (self._json_body().get("occurred_on") or "").strip()
             iso = None
             if raw:
@@ -794,6 +801,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not (2005 <= y <= 2040):
                     raise ApiError(400, "Date out of range")
                 iso = raw
+            if rec["category"] == "retrofit":
+                # entering a date completes the retrofit; clearing it reopens it
+                new_status = "complete" if iso else "outstanding"
+                conn.execute("UPDATE asset_records SET occurred_on = ?, status = ? WHERE id = ?",
+                             (iso, new_status, parts[1]))
+                return 200, {"ok": True, "occurred_on": iso, "status": new_status}
             conn.execute("UPDATE asset_records SET occurred_on = ? WHERE id = ?", (iso, parts[1]))
             return 200, {"ok": True, "occurred_on": iso}
 

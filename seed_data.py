@@ -105,6 +105,7 @@ def _kgh2025(rows):
         (9, "72 Month Major Service"), (13, "84 Month Major Service"),
         (19, "90 Month Major Service"), (25, "96 Month Major Service"),
         (30, "102 Month Minor Service"), (35, "108 Month Major Service"),
+        (46, "5-Year Oil Exchange"),
         (41, "114 Month Major Service"), (None, "120 Month Major Service"),
         (None, "126 Month Major Service"), (None, "132 Month Major Service"),
     ]
@@ -131,10 +132,13 @@ def _kgh2025(rows):
 
 
 def _hv(rows):
+    #  name, completed_col, planned_col (None = no source column -> always Null), sort
     DEFS = [
         ("HV maintenance - 2023 campaign", 2, None, 0),
         ("HV maintenance - 2024/25 rephasing", 7, 6, 1),
         ("HV maintenance - 2025/26", 10, 9, 2),
+        ("HV maintenance - 2026/27", None, None, 3),
+        ("HV maintenance - 2027/28", None, None, 4),
     ]
     out = {}
     for row in rows[1:]:
@@ -144,18 +148,15 @@ def _hv(rows):
         scope = clean(_get(row, 4))
         recs = []
         for name, ci, pi, si in DEFS:
-            date = parse_date(_get(row, ci))
+            date = parse_date(_get(row, ci)) if ci is not None else None
             planned = parse_date(_get(row, pi)) if pi is not None else None
-            if not date and not planned:
-                continue
             detail = None
             if si == 0 and scope:
                 detail = scope + " scope"
             elif planned and not date:
                 detail = "Planned " + planned
             recs.append({"name": name, "date": date, "detail": detail, "sort": si})
-        if recs:
-            out[tag] = recs
+        out[tag] = recs
     return out
 
 

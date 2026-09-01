@@ -73,24 +73,31 @@ Usernames are first-initial + surname, lowercase (`sclydesdale`, `scant`, `jgang
   Dragging a chip/task back to the rail (or its × button) frees it. The plan is saved per
   date; an unavailable technician is refused.
 - **Asset detail** — tabs for **Details**, **Service dates**, **HV history**, **Stat history**,
-  **Retrofits**, **Blades**, **Components**, **History** and **Pendings**.
+  **Retrofits**, **Blades**, **Components**, **History** and **Pendings**, with **‹ ›**
+  previous/next-turbine buttons in the header that step through the register alphabetically
+  by tag (wrapping at both ends) while staying on whichever tab you're viewing.
   - *Details* — **Identification** (turbine / type / location); an **Equipment** card;
     a **Defect / operational issue** card (KGH 2025 column G — highlighted when present);
     a **Next service due** card (108-month completion + 6 months, with a days-away / overdue
     indicator); and a **Condition monitoring (SMP)** box with gearbox / generator /
     main-bearing state and observations.
-  - *Service dates* — service completion dates 72 → 132 month (72/84/90/96/102/108/114/120/126/132).
-    72–114 seed from `KGH_2025.csv`; 120/126/132 have no source column yet. Any missing date
-    shows a **＋ Add date** button that writes straight to SQLite (`PATCH /api/records/:id`).
+  - *Service dates* — service completion dates 72 → 132 month (72/84/90/96/102/108/114/120/126/132)
+    plus the **5-Year Oil Exchange**. 72–114 and the oil exchange seed from `KGH_2025.csv`;
+    120/126/132 have no source column yet. Any missing date shows a **＋ Add date** button
+    that writes straight to SQLite (`PATCH /api/records/:id`).
   - *Blades* — blade drone inspection date (from `KGH_2025.csv`) with the same **＋ Add date**
     editor, and a read-only blade-configuration summary (type + serials).
-  - *HV history* — HV maintenance completion dates (2023 campaign, 2024/25 rephasing,
-    2025/26), from `HV.csv`.
+  - *HV history* — HV maintenance completion dates for the 2023 campaign, 2024/25 rephasing,
+    2025/26, and now **2026/27** and **2027/28**, from `HV.csv`. The two future campaigns
+    have no source column yet, so they seed blank with a **＋ Add date** editor, same as
+    Service dates.
   - *Stat history* — annual and semi-annual statutory inspections plus the 10-year lift
-    inspection, from `Stats.csv`.
-  - *Retrofits* — every retrofit campaign with its status: completed (with date), in
-    progress, or outstanding, from the *25 KGH Retro* tab (N/A rows omitted). Includes the
-    transformer wall upgrade (moved here from the HV tab).
+    inspection, from `Stats.csv` (read-only).
+  - *Retrofits* — every retrofit campaign, from the *25 KGH Retro* tab (N/A rows omitted).
+    Includes the transformer wall upgrade (moved here from the HV tab). Completed campaigns
+    show their date; outstanding/in-progress ones carry a status badge plus a **＋ Add date**
+    editor — entering a date pushes it to SQLite and flips the record to complete, clearing
+    it reverts to outstanding.
   - *Components* — nacelle/rotor/tower serial numbers, blade type, blade-bearing maker and
     commissioning date, from the *Nacelle tracability* tab of the **Kilgallioch App data**
     workbook (turbine IDs `A1`→`A01` normalised to match).
