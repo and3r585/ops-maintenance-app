@@ -310,9 +310,7 @@ function viewLogin() {
     h("div", { class: "field" }, h("label", { for: "p" }, "Password"), p),
     btn, errBox,
     h("div", { class: "seed-hint" },
-      "Demo logins", h("br"),
-      h("code", {}, "admin / admin123"), " — planner", h("br"),
-      h("code", {}, "sclydesdale / tech123"), " — technician"));
+      "Use the username and password issued to you."));
   root.replaceChildren(h("div", { class: "login-wrap" }, form));
 }
 
@@ -320,16 +318,18 @@ function viewHome() {
   const isAdmin = State.user.role === "ADMIN";
   const tiles = h("div", { class: "tiles" });
   tiles.append(
+    h("button", { class: "tile", onclick: () => navigate("#/dashboard") },
+      h("span", { class: "ico" }, "📊"),
+      h("h3", {}, "Site dashboard"),
+      h("p", {}, "Open pendings, the next service due dates, and retrofits still outstanding across the site.")),
     h("button", { class: "tile", onclick: () => navigate("#/assets") },
       h("span", { class: "ico" }, "🔧"),
       h("h3", {}, "View asset information"),
-      h("p", {}, "Browse the asset register, review full details and history, and log pending observations with photos.")));
+      h("p", {}, isAdmin
+        ? "Browse the asset register, review full details and history, and edit records."
+        : "Browse the asset register, review full details and history, and log pending observations with photos.")));
   if (isAdmin) {
     tiles.append(
-      h("button", { class: "tile", onclick: () => navigate("#/dashboard") },
-        h("span", { class: "ico" }, "📊"),
-        h("h3", {}, "Site dashboard"),
-        h("p", {}, "Open pendings, the next service due dates, and retrofits still outstanding across the site.")),
       h("button", { class: "tile", onclick: () => navigate("#/planning") },
         h("span", { class: "ico" }, "📅"),
         h("h3", {}, "Planning"),
@@ -348,9 +348,8 @@ function viewHome() {
     tiles));
 }
 
-/* ---------- site dashboard (admin) ---------- */
+/* ---------- site dashboard (all signed-in users) ---------- */
 async function viewDashboard() {
-  if (State.user.role !== "ADMIN") { navigate("#/home"); return; }
   loading();
   let d;
   try { d = await api("/dashboard"); }
@@ -424,7 +423,6 @@ function serviceRows(list) {
 
 /* ---------- dashboard drill-downs ---------- */
 async function viewPendingsList() {
-  if (State.user.role !== "ADMIN") { navigate("#/home"); return; }
   loading();
   const want = decodeURIComponent((location.hash.split("?status=")[1] || "")).toUpperCase();
   let data;
@@ -465,7 +463,6 @@ async function viewPendingsList() {
 }
 
 async function viewServicesList() {
-  if (State.user.role !== "ADMIN") { navigate("#/home"); return; }
   loading();
   let d;
   try { d = await api("/dashboard"); }
@@ -484,7 +481,6 @@ async function viewServicesList() {
 }
 
 async function viewRetrofitsList() {
-  if (State.user.role !== "ADMIN") { navigate("#/home"); return; }
   loading();
   let d;
   try { d = await api("/dashboard"); }
@@ -639,16 +635,14 @@ async function viewExplorer() {
       tr.append(h("td", { class: "sticky-col" }, row.tag));
       row.cells.forEach((cell, i) => {
         const td = h("td", {});
-        if (!cell || !cell.id) { td.append(h("span", { class: "muted" }, "—")); tr.append(td); return; }
+        // no record row for this turbine/column -> leave the cell blank and non-editable
+        if (!cell || !cell.id) { tr.append(td); return; }
         const name = data.columns[i];
         const inp = h("input", {
           type: isDate ? "date" : "text",
-          value: cell.value || "",
+          value: cell.value || "",         // blank in SQLite -> blank cell
           class: "explorer-cell",
         });
-        if (!isDate) inp.placeholder = "—";
-        if (isDate && !cell.value && cell.status && cell.status !== "complete")
-          td.classList.add("cell-flagged");
         inp.addEventListener("change", () => {
           const nv = inp.value.trim();
           const ov = cell.value || "";
@@ -775,9 +769,9 @@ async function viewAsset(id) {
     "Details": detailsPane,
     "Service dates": () => recordPane("service", detail.services, "No service dates recorded for this turbine."),
     "HV history": () => datePane("HV maintenance history",
-      "Completion dates from the HV tab of the KGH Virtual Whiteboard. The 2026/27 and 2027/28 "
-      + "campaigns have no source date yet — add one to record completion.",
-      detail.hv, "No HV maintenance recorded for this turbine.", true),
+      "Completion dates from the HV tab of the KGH Virtual Whiteboard."
+      + (isAdmin ? " The 2026/27 and 2027/28 campaigns have no source date yet — add one to record completion." : ""),
+      detail.hv, "No HV maintenance recorded for this turbine.", isAdmin),
     "Stat history": () => datePane("Statutory inspection history",
       "Completion dates from the Stats tab of the KGH Virtual Whiteboard.",
       detail.stat, "No statutory inspections recorded for this turbine."),
@@ -788,10 +782,13 @@ async function viewAsset(id) {
     "Pendings": pendingsPane,
   };
 
-  /* editable date widget — shows the date, or an "Add date" button when null.
-     Any change is PATCHed to /records/:id and pushed to SQLite. */
+  /* date widget. Admins get an inline editor (PATCH /records/:id -> SQLite);
+     everyone else sees the value read-only, and a blank stays blank. */
   function dateCell(rec, reload) {
-    if (!rec.id) return h("span", { class: "rec-date muted" }, "—");
+    if (!isAdmin || !rec.id) {
+      return h("span", { class: "rec-date" + (rec.date ? "" : " muted") },
+        rec.date ? fmtDate(rec.date) : "");
+    }
     const wrap = h("span", { class: "rec-date-edit" });
     const render = () => {
       clear(wrap);
@@ -829,7 +826,8 @@ async function viewAsset(id) {
     const blades = detail.blades || [];
     const card = h("div", { class: "card" }, h("h3", {}, "Blade inspection"),
       h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
-        "Drone inspection date from the KGH 2025 database. Add a date to record a completed inspection."));
+        "Drone inspection date from the KGH 2025 database."
+        + (isAdmin ? " Add a date to record a completed inspection." : "")));
     if (!blades.length) card.append(h("div", { class: "empty-state" }, "No blade records for this turbine."));
     else {
       const list = h("div", { class: "rec-list" });
@@ -867,7 +865,7 @@ async function viewAsset(id) {
       let right;
       if (editable && r.id) right = dateCell(r, drawTab);
       else if (r.date) right = h("span", { class: "rec-date" }, fmtDate(r.date));
-      else right = h("span", { class: "rec-date muted" }, r.detail || "Not completed");
+      else right = h("span", { class: "rec-date muted" }, r.detail || "");
       list.append(h("div", { class: "rec-row" }, h("div", { class: "rec-name" }, r.name), right));
     }
     card.append(list);
@@ -950,8 +948,8 @@ async function viewAsset(id) {
       const done = records.filter(r => r.date).length;
       card.append(h("h3", {}, "Service completion dates"),
         h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
-          `${done} of ${records.length} services completed. Dates from the KGH 2025 database — `
-          + `add a date to record a completed service.`));
+          `${done} of ${records.length} services completed. Dates from the KGH 2025 database`
+          + (isAdmin ? " — add a date to record a completed service." : ".")));
     } else {
       const nc = records.filter(r => !r.date).length;
       card.append(h("h3", {}, "Retrofit records"),
@@ -970,7 +968,7 @@ async function viewAsset(id) {
           : !r.date && r.status === "outstanding" ? h("span", { class: "rec-date out" }, "Outstanding")
           : null;
         right = h("span", { class: "rec-date-edit" }, badge, dateCell(r, drawTab));
-      } else right = h("span", { class: "rec-date muted" }, r.detail || "Not recorded");
+      } else right = h("span", { class: "rec-date muted" }, r.detail || "");
       list.append(h("div", { class: "rec-row" }, h("div", { class: "rec-name" }, r.name), right));
     }
     card.append(list);

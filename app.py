@@ -7,10 +7,12 @@ Single-file server: Python standard library only (no pip installs, no network).
   python3 app.py --port 9000
   python3 app.py --reset    # wipe data + reseed
 
-Roles:
-  admin / admin123          -> ADMIN       (planning + assets)
-  <technicians>             -> TECHNICIAN  (24 from the Manplan 2025 tab; all use tech123)
-                               usernames are first-initial + surname, e.g. sclydesdale, scant
+Roles & accounts:
+  All logins come from source/Credentials.csv (Name, First name, Username, Access, Password),
+  re-synced on every start. Access=Admin -> ADMIN, otherwise -> TECHNICIAN.
+    ADMIN       full edit rights (records, pendings review/parts, planning, Data Explorer)
+    TECHNICIAN  Site Dashboard + Asset Information, read-only except add/complete pendings
+  A built-in `admin` / `admin123` account is always kept (override with $ADMIN_PASSWORD).
 """
 
 import argparse
@@ -255,18 +257,8 @@ def seed():
 
     data = seed_data.load()
 
-    # --- users: admin + the technicians from Manplan 2025.csv (col E, rows 14-37) ---
-    if conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"] == 0:
-        rows = [("admin", os.environ.get("ADMIN_PASSWORD") or "admin123", "ADMIN", "Alex Reid")]
-        for t in data["technicians"]:
-            rows.append((t["username"], "tech123", "TECHNICIAN", t["name"]))
-        for username, pw, role, name in rows:
-            ph, salt = hash_password(pw)
-            conn.execute(
-                "INSERT INTO users (username,password_hash,salt,role,display_name,active,created_at)"
-                " VALUES (?,?,?,?,?,1,?)",
-                (username, ph, salt, role, name, now()),
-            )
+    # --- users: synced from Credentials.csv on every start (+ an `admin` break-glass) ---
+    sync_users(conn, data["credentials"])
 
     # --- assets: one per turbine in KGH 2025.csv (+ its defect note, col G) ---
     if conn.execute("SELECT COUNT(*) c FROM assets").fetchone()["c"] == 0:
@@ -398,20 +390,62 @@ def seed():
                  p["wo_code"], p["priority"], p["system"], p["created_at"] or now()),
             )
 
-    if conn.execute("SELECT COUNT(*) c FROM modules").fetchone()["c"] == 0:
-        for key, name, min_role, sort in [
-            ("assets", "Asset Information", "TECHNICIAN", 10),
-            ("planning", "Planning", "ADMIN", 20),
-            ("dashboard", "Site Dashboard", "ADMIN", 5),
-            ("explorer", "Data Explorer", "ADMIN", 30),
-        ]:
-            conn.execute(
-                "INSERT INTO modules (key,name,enabled,min_role,sort) VALUES (?,?,1,?,?)",
-                (key, name, min_role, sort),
-            )
+    # navigation registry — re-synced every start so role changes take effect.
+    #   technicians: Site Dashboard + Asset Information   admins: + Planning + Data Explorer
+    for key, name, min_role, sort in [
+        ("dashboard", "Site Dashboard", "TECHNICIAN", 5),
+        ("assets", "Asset Information", "TECHNICIAN", 10),
+        ("planning", "Planning", "ADMIN", 20),
+        ("explorer", "Data Explorer", "ADMIN", 30),
+    ]:
+        if conn.execute("SELECT 1 FROM modules WHERE key = ?", (key,)).fetchone():
+            conn.execute("UPDATE modules SET name=?, min_role=?, sort=?, enabled=1 WHERE key=?",
+                         (name, min_role, sort, key))
+        else:
+            conn.execute("INSERT INTO modules (key,name,enabled,min_role,sort) VALUES (?,?,1,?,?)",
+                         (key, name, min_role, sort))
 
     conn.commit()
     conn.close()
+
+
+def sync_users(conn, creds):
+    """Create/refresh login accounts from Credentials.csv. Runs on every start.
+
+    Keeps an `admin` break-glass account (password overridable with $ADMIN_PASSWORD).
+    Anyone not in the credentials list is deactivated, not deleted, so history and
+    roster/plan references stay intact.
+    """
+    existing = {r["username"]: r for r in conn.execute("SELECT * FROM users")}
+    keep = set()
+
+    def upsert(username, password, role, name):
+        keep.add(username)
+        cur = existing.get(username)
+        if cur:
+            calc, _ = hash_password(password, cur["salt"])
+            pw_ok = secrets.compare_digest(calc, cur["password_hash"])
+            if pw_ok and cur["role"] == role and cur["display_name"] == name and cur["active"]:
+                return
+            if pw_ok:
+                conn.execute("UPDATE users SET role=?, display_name=?, active=1 WHERE username=?",
+                             (role, name, username))
+            else:
+                ph, salt = hash_password(password)
+                conn.execute("UPDATE users SET password_hash=?, salt=?, role=?, display_name=?, "
+                             "active=1 WHERE username=?", (ph, salt, role, name, username))
+        else:
+            ph, salt = hash_password(password)
+            conn.execute("INSERT INTO users (username,password_hash,salt,role,display_name,active,created_at) "
+                         "VALUES (?,?,?,?,?,1,?)", (username, ph, salt, role, name, now()))
+
+    upsert("admin", os.environ.get("ADMIN_PASSWORD") or "admin123", "ADMIN", "Site Administrator")
+    for c in creds:
+        upsert(c["username"], c["password"], c["role"], c["name"])
+
+    for uname, row in existing.items():
+        if uname not in keep and row["active"]:
+            conn.execute("UPDATE users SET active=0 WHERE username=?", (uname,))
 
 
 # ---------------------------------------------------------------------------
@@ -739,9 +773,9 @@ class Handler(BaseHTTPRequestHandler):
                 techs.append(d)
             return 200, {"technicians": techs, "date": date}
 
-        # --- site management dashboard (admin) ---
+        # --- site dashboard (any signed-in user; read-only figures) ---
         if parts == ["dashboard"] and method == "GET":
-            self._require(conn, "ADMIN")
+            self._require(conn)
             by_status = {r["status"]: r["c"] for r in conn.execute(
                 "SELECT status, COUNT(*) c FROM pending_entries GROUP BY status")}
             open_pendings = sum(c for s, c in by_status.items() if s != "COMPLETED")
@@ -770,9 +804,9 @@ class Handler(BaseHTTPRequestHandler):
                 "incomplete_retrofit_count": len(retro_rows),
             }
 
-        # --- all pending entries (admin drill-down list) ---
+        # --- all pending entries (dashboard drill-down list; any signed-in user) ---
         if parts == ["pendings"] and method == "GET":
-            self._require(conn, "ADMIN")
+            self._require(conn)
             want = (query.get("status", [""])[0] or "").upper()
             sql = ("SELECT p.*, a.tag AS turbine, u.display_name AS author_name, "
                    "cu.display_name AS completed_by_name "
@@ -916,9 +950,9 @@ class Handler(BaseHTTPRequestHandler):
                 },
             }
 
-        # set / clear a service, blade, hv or retrofit record date (any authenticated user)
+        # set / clear a service, blade, hv or retrofit record date (admin only)
         if len(parts) == 2 and parts[0] == "records" and method == "PATCH":
-            user = self._require(conn)
+            user = self._require(conn, "ADMIN")
             rec = conn.execute("SELECT * FROM asset_records WHERE id = ?", (parts[1],)).fetchone()
             if not rec:
                 raise ApiError(404, "Record not found")
@@ -961,7 +995,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # --- pendings ---
         if parts == ["pendings", "export"] and method == "GET":
-            self._require(conn, "ADMIN")
+            self._require(conn)
             want = (query.get("status", [""])[0] or "").upper()
             sql = (
                 "SELECT a.tag AS turbine, p.wo_code, p.priority, p.system, p.status, "
@@ -1102,10 +1136,8 @@ class Handler(BaseHTTPRequestHandler):
                 line = [tag]
                 for n in cols:
                     cell = by_tag[tag].get(n)
-                    val = (cell or {}).get("value")
-                    if not val and cell and cell.get("status") and cell["status"] != "complete":
-                        val = cell["status"]
-                    line.append(val or "")
+                    # blank in the database -> blank in the export
+                    line.append((cell or {}).get("value") or "")
                 w.writerow(line)
             fname = "explorer-%s-%s.csv" % (cat, today())
             return 200, RawResponse(buf.getvalue(), "text/csv; charset=utf-8", fname)
@@ -1518,8 +1550,8 @@ def main():
     print("\n  Site Portal")
     print("  " + "-" * 40)
     print("  running at   %s" % url)
-    print("  admin login  admin / admin123")
-    print("  technician   sclydesdale / tech123   (24 Manplan techs, all tech123)")
+    print("  logins       from source/Credentials.csv (synced each start)")
+    print("  break-glass  admin / %s" % (os.environ.get("ADMIN_PASSWORD") or "admin123"))
     print("  stop         Ctrl-C\n")
     try:
         httpd.serve_forever()

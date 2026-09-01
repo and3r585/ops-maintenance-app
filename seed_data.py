@@ -23,6 +23,7 @@ FILES = {
     "manplan": "Manplan.csv",
     "jobreq": "Job_Request.csv",
     "pendings": "Pendings.csv",
+    "credentials": "Credentials.csv",
 }
 
 # ---------------------------------------------------------------------------
@@ -338,6 +339,25 @@ def _jobreq(rows):
     return out
 
 
+def _credentials(rows):
+    """Credentials.csv -> login accounts. Columns: Name, First name, Username, Access, Password."""
+    out = []
+    for row in rows[1:]:
+        name = _get(row, 0)
+        username = _get(row, 2)
+        access = _get(row, 3).upper()
+        password = _get(row, 4)
+        if not username or not password:
+            continue
+        out.append({
+            "name": name or username,
+            "username": username,
+            "role": "ADMIN" if access.startswith("ADMIN") else "TECHNICIAN",
+            "password": password,
+        })
+    return out
+
+
 def _pendings(rows):
     """Pendings.csv -> list of pending entries per turbine.
        col 0 WO code, 3 turbine, 4 priority, 5 description, 6 long desc,
@@ -385,6 +405,7 @@ def load():
     return {
         "turbines": order,
         "technicians": names,
+        "credentials": _credentials(_rows(FILES["credentials"])),
         "services": services,
         "defects": defects,
         "blades": blades,

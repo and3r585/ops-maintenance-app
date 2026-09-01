@@ -40,38 +40,42 @@ Railway / Fly.io / a small VPS work the same way — run `python app.py`, give i
 
 ## Logins
 
-| Username | Password | Role | Can |
-|----------|----------|------|-----|
-| `admin`  | `admin123` | Admin | Planning board + everything below |
-| `sclydesdale` | `tech123` | Technician | View assets, add pending entries + photos |
-| _…23 more_ | `tech123` | Technician | " |
+Every account comes from **`source/Credentials.csv`** (`Name, First name, Username, Access,
+Password`). `Access = Admin` → **Admin**, anything else → **Technician**. The list is
+re-synced into the database on **every server start** — edit the CSV, restart, and the
+usernames / passwords / roles update in place (accounts dropped from the CSV are
+deactivated, not deleted, so history stays intact). A built-in `admin` / `admin123`
+break-glass account is always kept (override with `$ADMIN_PASSWORD`).
 
-The 24 technicians are the names in **column E, rows 14–37 of the Manplan 2025 tab**.
-Usernames are first-initial + surname, lowercase (`sclydesdale`, `scant`, `jgange`, `rfrew`,
-`jphillips`, `jmccartney`, `sloughran`, `jyoung`, `wmcmillan`, `lkerr`, `apatterson`,
-`dhendren`, `bmullen`, `mglover`, `jzonfrillo`, `smccathie`, `slennox`, `jhunter`,
-`tdempsie`, `lclark`, `lmadden`, `bsimpson`, `eplunkett`, `jmackenzie`). All use `tech123`.
+| Role | Sees | Can change |
+|------|------|-----------|
+| **Technician** | Site Dashboard, Asset Information | **only** add a pending entry, or complete a reviewed one (mandatory comment + photo) |
+| **Admin** | everything, incl. Planning + Data Explorer | everything — service/HV/retrofit/blade dates, pending review + parts, planning, bulk edits |
 
 ## What's built
 
 - **Login page** — username + password gate on the whole app.
-- **Role landing** — technicians get "View asset information"; admins additionally get
-  "Site dashboard", "Planning" and "Data Explorer".
+- **Role landing** — technicians get "Site dashboard" + "View asset information"; admins
+  additionally get "Planning" and "Data Explorer".
 - **Asset register** — 96 turbines seeded from the *TURBINE* column of the *KGH 2025* tab
   of the KGH Virtual Whiteboard workbook, grouped by array (A–J). Searchable/filterable,
   with an open-pendings badge per turbine. No operational-status field on assets.
-- **Technicians** — 24 names from column E, rows 14–37 of the *Manplan 2025* tab; these are
-  the columns on the planning board and the assignees for jobs.
-- **Site dashboard (admin)** — open pending-entry count (by status), the next 10 service due
+- **Technicians / roster** — the day-by-day availability grid comes from column E, rows
+  14–37 of the *Manplan 2025* tab; a roster row attaches to a login account when the
+  Manplan-derived username matches a `Credentials.csv` username. The planning-board columns
+  and job assignees are the **active technician accounts** from `Credentials.csv`.
+- **Site dashboard** — open pending-entry count (by status), the next 10 service due
   dates across the site (108-month + 6 months, soonest first), and every retrofit campaign
-  still outstanding or in progress with the affected turbine counts.
-- **Data Explorer (admin)** — two tools in one page:
+  still outstanding or in progress with the affected turbine counts. Visible to everyone;
+  read-only.
+- **Data Explorer (admin only)** — two tools in one page:
   - *Bulk table* — pick any asset tab (Service dates, HV history, Stat history, Retrofits,
     Blades, Components) and get one table with a row per turbine and a column per record.
     Cells are editable inline; edits are staged and highlighted, then a **Review & save**
     step shows every change as `was → new` before it is written to SQLite. Each save is
     written to a `record_changes` audit log. **Export this table (CSV)** dumps the current
-    table as-is.
+    table as-is. **A cell that is blank in the database stays blank here** — no `—`, no
+    placeholder text.
   - *Change report* — pick a from/to date and download an **.xlsx workbook** with one
     worksheet per asset tab that had any edit in that window (plus a Pendings sheet for
     pending entries raised/reserved/completed in the window). Only tabs that actually
@@ -89,6 +93,9 @@ Usernames are first-initial + surname, lowercase (`sclydesdale`, `scant`, `jgang
   **Retrofits**, **Blades**, **Components**, **History** and **Pendings**, with **‹ ›**
   previous/next-turbine buttons in the header that step through the register alphabetically
   by tag (wrapping at both ends) while staying on whichever tab you're viewing.
+  Technicians see every tab **read-only** except Pendings (add / complete). The date
+  editors below (**＋ Add date**) show for admins only; for a technician a missing date is
+  simply blank.
   - *Details* — **Identification** (turbine / type / location); an **Equipment** card;
     a **Defect / operational issue** card (KGH 2025 column G — highlighted when present);
     a **Next service due** card (108-month completion + 6 months, with a days-away / overdue
@@ -141,9 +148,10 @@ nothing is needed at runtime once the DB is built. Dates in any of `YYYY-MM-DD`,
 | `Kilgallioch_App_data.csv` | component serial numbers (blade-bearing columns are blank in the export) |
 | `Equipment_info.csv` | make / model / family / serial / dates |
 | `KGH_SMP_Action_Tracker.csv` | gearbox / generator / main-bearing state + observations |
-| `Manplan.csv` | technicians + the day-by-day availability roster |
+| `Manplan.csv` | the day-by-day technician availability roster |
 | `Job_Request.csv` | per-turbine work-order log |
 | `Pendings.csv` | open pending notifications per turbine |
+| `Credentials.csv` | login accounts — username, password, Admin/Tech (synced on every start) |
 
 ## Extending it later
 

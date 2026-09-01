@@ -575,8 +575,6 @@ textarea { resize: vertical; min-height: 90px; }
 }
 .explorer-cell:focus { border-color: var(--accent); background: var(--surface); outline: none; }
 .explorer-table td.cell-dirty { background: var(--accent-tint); }
-.explorer-table td.cell-flagged { background: rgba(200, 155, 60, .12); }
-.explorer-table td .muted { color: var(--text-faint); }
 
 .explorer-bar {
   position: fixed; left: 50%; transform: translateX(-50%); bottom: 1.1rem; z-index: 40;
