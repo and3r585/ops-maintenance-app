@@ -95,6 +95,7 @@ const cap = (s) => s ? s[0] + s.slice(1).toLowerCase() : s;
 function pendingItem(p, opts) {
   opts = opts || {};
   const isAdmin = State.user.role === "ADMIN";
+  const canComplete = State.user.role === "ADMIN" || State.user.role === "TECHNICIAN";
   const reload = opts.onChange || (() => {});
   const notePhotos = (p.photos || []).filter(x => x.kind !== "evidence");
   const evidence = (p.photos || []).filter(x => x.kind === "evidence");
@@ -150,7 +151,9 @@ function pendingItem(p, opts) {
         (p.parts && p.parts.length ? "Edit parts reserved" : "Parts reserved")));
       acts.append(h("button", { class: "btn sm ghost", onclick: () => patchStatus("SUBMITTED") }, "Revert to submitted"));
     }
-    acts.append(h("button", { class: "btn sm primary", onclick: () => card.append(completeForm()) }, "Complete"));
+    if (canComplete) {
+      acts.append(h("button", { class: "btn sm primary", onclick: () => card.append(completeForm()) }, "Complete"));
+    }
   }
   if (p.status === "COMPLETED" && isAdmin) {
     acts.append(h("button", { class: "btn sm ghost", onclick: () => patchStatus("REVIEWED") }, "Reopen"));
@@ -272,7 +275,7 @@ function topbar(active) {
       h("button", { class: "icon-btn", title: "Toggle theme", onclick: () => { toggleTheme(); } }, "◐"),
       State.user && h("div", { class: "who" },
         h("b", {}, State.user.display_name),
-        h("span", { class: "role" }, State.user.role)),
+        h("span", { class: "role" }, State.user.role === "VIEW" ? "VIEW ONLY" : State.user.role)),
       h("button", { class: "btn sm ghost", onclick: () => logout() }, "Sign out")));
 }
 
@@ -315,7 +318,9 @@ function viewLogin() {
 }
 
 function viewHome() {
-  const isAdmin = State.user.role === "ADMIN";
+  const role = State.user.role;
+  const isAdmin = role === "ADMIN";
+  const elevated = role === "ADMIN" || role === "VIEW";   // sees the full toolset
   const tiles = h("div", { class: "tiles" });
   tiles.append(
     h("button", { class: "tile", onclick: () => navigate("#/dashboard") },
@@ -327,23 +332,31 @@ function viewHome() {
       h("h3", {}, "View asset information"),
       h("p", {}, isAdmin
         ? "Browse the asset register, review full details and history, and edit records."
+        : role === "VIEW"
+        ? "Browse the asset register and review full details and history."
         : "Browse the asset register, review full details and history, and log pending observations with photos.")));
-  if (isAdmin) {
+  if (elevated) {
     tiles.append(
       h("button", { class: "tile", onclick: () => navigate("#/planning") },
         h("span", { class: "ico" }, "📅"),
         h("h3", {}, "Planning"),
-        h("p", {}, "Build the day's team plan — drag available technicians and tasks into 10 team rows.")),
+        h("p", {}, isAdmin
+          ? "Build the day's team plan — drag available technicians and tasks into 10 team rows."
+          : "See the day's team plan — teams, tasks and technicians.")),
       h("button", { class: "tile", onclick: () => navigate("#/explorer") },
         h("span", { class: "ico" }, "🗃️"),
         h("h3", {}, "Data Explorer"),
-        h("p", {}, "View every asset tab as one editable table, push approved changes to the database, and export a dated change report.")));
+        h("p", {}, isAdmin
+          ? "View every asset tab as one editable table, push approved changes to the database, and export a dated change report."
+          : "View every asset tab as one table and export a dated change report.")));
   }
   root.replaceChildren(shell("home",
     h("div", { class: "page-head" },
       h("h1", {}, "Welcome, " + State.user.display_name.split(" ")[0]),
       h("p", { class: "sub" }, isAdmin
         ? "You have planner access. Choose an area to work in."
+        : role === "VIEW"
+        ? "You have read-only access. Choose an area to view."
         : "Choose an area to work in.")),
     tiles));
 }
@@ -538,7 +551,9 @@ function exportPendings(btn, status) {
 
 /* ---------- data explorer (admin) ---------- */
 async function viewExplorer() {
-  if (State.user.role !== "ADMIN") { navigate("#/home"); return; }
+  const role = State.user.role;
+  if (role !== "ADMIN" && role !== "VIEW") { navigate("#/home"); return; }
+  const readOnly = role !== "ADMIN";
   loading();
   let cats;
   try { cats = (await api("/explorer/categories")).categories; }
@@ -637,6 +652,10 @@ async function viewExplorer() {
         const td = h("td", {});
         // no record row for this turbine/column -> leave the cell blank and non-editable
         if (!cell || !cell.id) { tr.append(td); return; }
+        if (readOnly) {
+          if (cell.value) td.append(h("span", {}, cell.value));
+          tr.append(td); return;
+        }
         const name = data.columns[i];
         const inp = h("input", { class: "explorer-cell" });
         inp.value = cell.value || "";     // blank in SQLite -> blank cell
@@ -691,7 +710,9 @@ async function viewExplorer() {
   root.replaceChildren(shell("explorer",
     h("div", { class: "page-head" },
       h("h1", {}, "Data Explorer"),
-      h("p", { class: "sub" }, "Every asset tab as one table for all 96 turbines. Edit cells, review, then push approved changes to the database.")),
+      h("p", { class: "sub" }, readOnly
+        ? "Every asset tab as one table for all 96 turbines. Read-only — export a table or download a change report."
+        : "Every asset tab as one table for all 96 turbines. Edit cells, review, then push approved changes to the database.")),
     h("div", { class: "card" },
       h("h3", {}, "Change report",
         h("span", { class: "hint" }, "one worksheet per tab that changed in the window")),
@@ -764,6 +785,7 @@ async function viewAsset(id) {
   } catch (e) { return renderError(e); }
   const a = detail.asset;
   const isAdmin = State.user.role === "ADMIN";
+  const canAddPending = State.user.role === "ADMIN" || State.user.role === "TECHNICIAN";
 
   const tabWrap = h("div", {});
   const tabs = ["Details", "Service dates", "HV history", "Stat history", "Retrofits", "Blades", "Components", "History", "Pendings"];
@@ -1052,11 +1074,12 @@ async function viewAsset(id) {
 
   function pendingsPane() {
     const wrap = h("div", {});
-    wrap.append(addPendingForm());
+    if (canAddPending) wrap.append(addPendingForm());
     const open = pendings.filter(p => p.status !== "COMPLETED");
     const done = pendings.filter(p => p.status === "COMPLETED");
     if (!pendings.length) {
-      wrap.append(h("div", { class: "empty-state" }, "No pending entries yet. Add the first one above."));
+      wrap.append(h("div", { class: "empty-state" },
+        canAddPending ? "No pending entries yet. Add the first one above." : "No pending entries for this turbine."));
     }
     for (const p of open) wrap.append(pendingItem(p, { onChange: reloadPendings }));
     if (done.length) {
@@ -1132,7 +1155,9 @@ const REASON_LABEL = {
 };
 
 async function viewPlanning() {
-  if (State.user.role !== "ADMIN") { navigate("#/home"); return; }
+  const role = State.user.role;
+  if (role !== "ADMIN" && role !== "VIEW") { navigate("#/home"); return; }
+  const readOnly = role !== "ADMIN";
   loading();
   let plan;
   let planDate = new Date().toISOString().slice(0, 10);
@@ -1209,10 +1234,10 @@ async function viewPlanning() {
     const off = t.available === false;
     const chip = h("div", { class: "tech-chip" + (off ? " off" : "") + (fromTeam ? " placed" : "") },
       h("span", { class: "tc-name" }, t.display_name),
-      fromTeam
+      fromTeam && !readOnly
         ? h("button", { class: "chip-x", title: "Remove", onclick: () => mutate({ op: "remove_member", team_no: +fromTeam, user_id: t.id }) }, "×")
         : (off ? h("span", { class: "chip-reason" }, REASON_LABEL[t.reason] || t.reason) : null));
-    if (!off) chip.addEventListener("pointerdown", (e) => startDrag(e, { kind: "tech", id: t.id, fromTeam }, chip));
+    if (!off && !readOnly) chip.addEventListener("pointerdown", (e) => startDrag(e, { kind: "tech", id: t.id, fromTeam }, chip));
     return chip;
   }
 
@@ -1223,8 +1248,8 @@ async function viewPlanning() {
         j.priority != null ? h("span", { class: "pri-tag p" + j.priority }, "Priority " + j.priority) : null,
         j.asset_tag ? h("span", {}, j.asset_tag) : null,
         j.wo_code ? h("span", {}, "WO " + j.wo_code) : null),
-      fromTeam ? h("button", { class: "chip-x", title: "Remove", onclick: () => mutate({ op: "clear_job", team_no: +fromTeam }) }, "×") : null);
-    card.addEventListener("pointerdown", (e) => startDrag(e, { kind: "job", id: j.id, fromTeam }, card));
+      fromTeam && !readOnly ? h("button", { class: "chip-x", title: "Remove", onclick: () => mutate({ op: "clear_job", team_no: +fromTeam }) }, "×") : null);
+    if (!readOnly) card.addEventListener("pointerdown", (e) => startDrag(e, { kind: "job", id: j.id, fromTeam }, card));
     return card;
   }
 
@@ -1261,10 +1286,12 @@ async function viewPlanning() {
       h("div", { class: "tcell tmembers" }, "Technicians (min 2)")));
     for (const team of plan.teams) {
       const taskZone = h("div", { class: "tcell ttask dropzone2", "data-accept": "job", "data-team": team.team_no },
-        team.job ? jobChip(team.job, team.team_no) : h("span", { class: "slot-hint" }, "Drop a task"));
+        team.job ? jobChip(team.job, team.team_no)
+                 : h("span", { class: "slot-hint" }, readOnly ? "—" : "Drop a task"));
       const memZone = h("div", { class: "tcell tmembers dropzone2", "data-accept": "tech", "data-team": team.team_no });
       team.members.forEach(m => memZone.append(techChip(m, team.team_no)));
-      for (let i = team.members.length; i < 2; i++) memZone.append(h("span", { class: "slot-hint" }, "Drop a technician"));
+      if (!readOnly) for (let i = team.members.length; i < 2; i++) memZone.append(h("span", { class: "slot-hint" }, "Drop a technician"));
+      if (readOnly && !team.members.length) memZone.append(h("span", { class: "slot-hint" }, "—"));
       const needs = team.job && team.members.length < 2;
       grid.append(h("div", { class: "team-row" + (needs ? " needs" : "") },
         h("div", { class: "tcell tno" }, String(team.team_no),
@@ -1275,7 +1302,9 @@ async function viewPlanning() {
 
   root.replaceChildren(shell("planning",
     h("div", { class: "page-head" }, h("h1", {}, "Planning"),
-      h("p", { class: "sub" }, "Pick the date, then drag available technicians and tasks from the left into the 10 team rows. Every task needs at least two technicians.")),
+      h("p", { class: "sub" }, readOnly
+        ? "Read-only view of the day's team plan. Pick a date to see that day's teams, tasks and technicians."
+        : "Pick the date, then drag available technicians and tasks from the left into the 10 team rows. Every task needs at least two technicians.")),
     h("div", { class: "plan-layout" }, rail, h("div", { class: "team-wrap" }, grid))));
   draw();
 }

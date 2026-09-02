@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS users (
     username      TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     salt          TEXT NOT NULL,
-    role          TEXT NOT NULL CHECK (role IN ('ADMIN','TECHNICIAN')),
+    role          TEXT NOT NULL CHECK (role IN ('ADMIN','TECHNICIAN','VIEW')),
     display_name  TEXT NOT NULL,
     active        INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL
@@ -247,6 +247,28 @@ def seed():
             "  PRIMARY KEY (plan_date, team_no));"
         )
     conn.executescript("DROP TABLE IF EXISTS job_activity; DROP TABLE IF EXISTS jobs;")
+
+    # --- migration: widen the users.role CHECK to allow the read-only 'VIEW' role ---
+    udef = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
+    ).fetchone()
+    if udef and "'VIEW'" not in udef["sql"]:
+        conn.executescript(
+            "PRAGMA foreign_keys=OFF;"
+            "ALTER TABLE users RENAME TO users_old;"
+            "CREATE TABLE users ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  username TEXT UNIQUE NOT NULL,"
+            "  password_hash TEXT NOT NULL,"
+            "  salt TEXT NOT NULL,"
+            "  role TEXT NOT NULL CHECK (role IN ('ADMIN','TECHNICIAN','VIEW')),"
+            "  display_name TEXT NOT NULL,"
+            "  active INTEGER NOT NULL DEFAULT 1,"
+            "  created_at TEXT NOT NULL);"
+            "INSERT INTO users SELECT id,username,password_hash,salt,role,display_name,active,created_at FROM users_old;"
+            "DROP TABLE users_old;"
+            "PRAGMA foreign_keys=ON;"
+        )
 
     data = seed_data.load()
 
@@ -635,11 +657,14 @@ class Handler(BaseHTTPRequestHandler):
         return row
 
     def _require(self, conn, role=None):
+        """role: a single role string or an iterable of allowed roles."""
         user = self._current_user(conn)
         if not user:
             raise ApiError(401, "Not authenticated")
-        if role and user["role"] != role:
-            raise ApiError(403, "Forbidden")
+        if role is not None:
+            allowed = (role,) if isinstance(role, str) else tuple(role)
+            if user["role"] not in allowed:
+                raise ApiError(403, "Forbidden")
         return user
 
     # -- dispatch ----------------------------------------------------------
@@ -718,7 +743,8 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["modules"] and method == "GET":
             user = self._require(conn)
             rows = conn.execute("SELECT * FROM modules WHERE enabled = 1 ORDER BY sort").fetchall()
-            visible = [dict(r) for r in rows if r["min_role"] == "TECHNICIAN" or user["role"] == "ADMIN"]
+            elevated = user["role"] in ("ADMIN", "VIEW")   # VIEW sees everything an admin sees
+            visible = [dict(r) for r in rows if r["min_role"] == "TECHNICIAN" or elevated]
             return 200, {"modules": visible}
 
         # --- site dashboard (any signed-in user; read-only figures) ---
@@ -786,7 +812,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # --- daily team plan ---
         if parts == ["plan"] and method == "GET":
-            self._require(conn, "ADMIN")
+            self._require(conn, ("ADMIN", "VIEW"))
             date = (query.get("date", [today()])[0] or today()).strip()
             return 200, load_plan(conn, date)
 
@@ -928,7 +954,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._require(conn)
                 return 200, {"pendings": load_pendings(conn, asset_id=asset_id)}
             if method == "POST":
-                user = self._require(conn)
+                user = self._require(conn, ("ADMIN", "TECHNICIAN"))
                 return self._create_pending(conn, asset_id, user)
 
         # --- pendings ---
@@ -1019,7 +1045,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # technician (or admin) completes a Reviewed entry with mandatory evidence
         if len(parts) == 3 and parts[0] == "pendings" and parts[2] == "complete" and method == "POST":
-            user = self._require(conn)
+            user = self._require(conn, ("ADMIN", "TECHNICIAN"))
             row = conn.execute("SELECT status FROM pending_entries WHERE id = ?", (parts[1],)).fetchone()
             if not row:
                 raise ApiError(404, "Pending entry not found")
@@ -1041,15 +1067,15 @@ class Handler(BaseHTTPRequestHandler):
             )
             return 200, {"ok": True}
 
-        # --- data explorer (admin) ---
+        # --- data explorer (ADMIN edits; VIEW can read/export the same tables) ---
         if parts == ["explorer", "categories"] and method == "GET":
-            self._require(conn, "ADMIN")
+            self._require(conn, ("ADMIN", "VIEW"))
             return 200, {"categories": [
                 {"key": k, "label": lbl, "value_field": vf}
                 for k, lbl, vf in EXPLORER_CATEGORIES]}
 
         if parts == ["explorer", "matrix"] and method == "GET":
-            self._require(conn, "ADMIN")
+            self._require(conn, ("ADMIN", "VIEW"))
             cat = (query.get("category", [""])[0] or "").strip()
             if cat not in EXPLORER_VALUE_FIELD:
                 raise ApiError(404, "Unknown category")
@@ -1061,7 +1087,7 @@ class Handler(BaseHTTPRequestHandler):
                          "value_field": vf, "columns": cols, "rows": rows}
 
         if parts == ["explorer", "export"] and method == "GET":
-            self._require(conn, "ADMIN")
+            self._require(conn, ("ADMIN", "VIEW"))
             cat = (query.get("category", [""])[0] or "").strip()
             if cat not in EXPLORER_VALUE_FIELD:
                 raise ApiError(404, "Unknown category")
@@ -1126,7 +1152,7 @@ class Handler(BaseHTTPRequestHandler):
             return 200, {"applied": applied, "errors": errors}
 
         if parts == ["explorer", "changes"] and method == "GET":
-            self._require(conn, "ADMIN")
+            self._require(conn, ("ADMIN", "VIEW"))
             frm = (query.get("from", [""])[0] or "").strip()
             to = (query.get("to", [""])[0] or "").strip()
             for d in (frm, to):

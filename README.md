@@ -63,16 +63,17 @@ Railway / Fly.io / a small VPS work the same way — run `python app.py`, give i
 ## Logins
 
 Every account comes from **`source/Credentials.csv`** (`Name, First name, Username, Access,
-Password`). `Access = Admin` → **Admin**, anything else → **Technician**. The list is
-re-synced into the database on **every server start** — edit the CSV, restart, and the
-usernames / passwords / roles update in place (accounts dropped from the CSV are
-deactivated, not deleted, so history stays intact). A built-in `admin` / `admin123`
+Password`). `Access` maps to a role: **`Admin`** → Admin, **`View`** → View, anything else →
+Technician. The list is re-synced into the database on **every server start** — edit the CSV,
+restart, and the usernames / passwords / roles update in place (accounts dropped from the CSV
+are deactivated, not deleted, so history stays intact). A built-in `admin` / `admin123`
 break-glass account is always kept (override with `$ADMIN_PASSWORD`).
 
 | Role | Sees | Can change |
 |------|------|-----------|
 | **Technician** | Site Dashboard, Asset Information | **only** add a pending entry, or complete a reviewed one (mandatory comment + photo) |
-| **Admin** | everything, incl. Planning + Data Explorer | everything — service/HV/retrofit/blade dates, pending review + parts, planning, bulk edits |
+| **View** | everything an Admin sees — Site Dashboard, Asset Information, Planning, Data Explorer | **nothing** — every page is read-only; CSV / change-report exports still work |
+| **Admin** | everything | everything — service/HV/retrofit/blade dates, pending review + parts, planning, bulk edits |
 
 ## What's built
 
@@ -177,7 +178,7 @@ board's task backlog is drawn straight from the imported pending entries.
 | `Manplan.csv` | the day-by-day technician availability roster |
 | `Job_Request.csv` | per-turbine work-order log |
 | `Pendings.csv` | open pending notifications per turbine |
-| `Credentials.csv` | login accounts — username, password, Admin/Tech (synced on every start) |
+| `Credentials.csv` | login accounts — username, password, Admin / View / Tech (synced on every start) |
 
 ## Extending it later
 

@@ -340,7 +340,11 @@ def _jobreq(rows):
 
 
 def _credentials(rows):
-    """Credentials.csv -> login accounts. Columns: Name, First name, Username, Access, Password."""
+    """Credentials.csv -> login accounts. Columns: Name, First name, Username, Access, Password.
+
+    Access: 'Admin' -> ADMIN (full edit), 'View' -> VIEW (read-only, sees everything
+    an admin sees), anything else -> TECHNICIAN (can only add / complete pendings).
+    """
     out = []
     for row in rows[1:]:
         name = _get(row, 0)
@@ -349,10 +353,12 @@ def _credentials(rows):
         password = _get(row, 4)
         if not username or not password:
             continue
+        role = "ADMIN" if access.startswith("ADMIN") else \
+               "VIEW" if access.startswith("VIEW") else "TECHNICIAN"
         out.append({
             "name": name or username,
             "username": username,
-            "role": "ADMIN" if access.startswith("ADMIN") else "TECHNICIAN",
+            "role": role,
             "password": password,
         })
     return out
