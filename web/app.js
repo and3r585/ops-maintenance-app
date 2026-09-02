@@ -905,7 +905,7 @@ async function viewAsset(id) {
       h("div", { class: "card" }, h("h3", {}, "Identification"),
         dl([["Turbine", a.tag], ...(a.name !== a.tag ? [["Name", a.name]] : []),
             ["Type", a.type], ["Location", a.location]])),
-      h("div", { class: "card" }, h("h3", {}, "Equipment"),
+      h("div", { class: "card" }, h("h3", {}, "Asset Details"),
         dl([["Manufacturer", a.manufacturer], ["Model", a.model], ["Family", a.family],
             ["Serial number", a.serial], ["Installed", fmtDate(a.install_date)],
             ["Take-over cert.", fmtDate(a.toc)], ["Warranty expiry", fmtDate(a.warranty_expiry)]])),

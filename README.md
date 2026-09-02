@@ -121,7 +121,8 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   Technicians see every tab **read-only** except Pendings (add / complete). The date
   editors below (**＋ Add date**) show for admins only; for a technician a missing date is
   simply blank.
-  - *Details* — **Identification** (turbine / type / location); an **Equipment** card;
+  - *Details* — **Identification** (turbine / type / location); an **Asset Details** card
+    (make / model / family / serial / key dates, from `Equipment_info.csv`);
     a **Defect / operational issue** card (KGH 2025 column G — highlighted when present);
     a **Next service due** card (108-month completion + 6 months, with a days-away / overdue
     indicator); and a **Condition monitoring (SMP)** box with gearbox / generator /

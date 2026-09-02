@@ -291,7 +291,7 @@ textarea { resize: vertical; min-height: 90px; }
 .tile:hover { border-color: var(--accent); }
 .tile:active { transform: translateY(1px); }
 .tile .ico { font-size: 1.5rem; }
-.tile h3 { margin: .2rem 0 0; }
+.tile h3 { margin: .2rem 0 0; color: var(--accent); }
 .tile p { color: var(--text-soft); font-size: .88rem; margin: 0; }
 
 /* ---- misc ---- */
