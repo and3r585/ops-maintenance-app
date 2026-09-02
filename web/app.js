@@ -116,7 +116,7 @@ function pendingItem(p, opts) {
     meta.length ? h("div", { class: "pending-meta" }, ...meta) : null,
     h("div", { style: "white-space:pre-line" }, esc(p.note)),
     notePhotos.length ? h("div", { class: "photos" }, ...notePhotos.map(ph =>
-      h("img", { src: ph.url, alt: "photo", loading: "lazy", onclick: () => lightbox(ph.url) }))) : null);
+      h("img", { src: ph.thumb || ph.url, alt: "photo", loading: "lazy", onclick: () => lightbox(ph.url) }))) : null);
 
   // parts reservation
   if ((p.parts && p.parts.length) || p.parts_service_order) {
@@ -137,7 +137,7 @@ function pendingItem(p, opts) {
           (p.completed_at ? " · " + fmtWhen(p.completed_at) : ""))),
       p.completed_note ? h("div", { style: "white-space:pre-line" }, esc(p.completed_note)) : null,
       evidence.length ? h("div", { class: "photos" }, ...evidence.map(ph =>
-        h("img", { src: ph.url, alt: "evidence", loading: "lazy", onclick: () => lightbox(ph.url) }))) : null));
+        h("img", { src: ph.thumb || ph.url, alt: "evidence", loading: "lazy", onclick: () => lightbox(ph.url) }))) : null));
   }
 
   // actions

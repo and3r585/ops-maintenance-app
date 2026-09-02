@@ -25,7 +25,7 @@ services:
     runtime: python
     plan: starter
     region: frankfurt          # closest to Kilgallioch; change if you like
-    buildCommand: "true"       # stdlib only — nothing to install
+    buildCommand: pip install -r requirements.txt   # Pillow (photo resizing)
     startCommand: python app.py
     healthCheckPath: /
     autoDeploy: true

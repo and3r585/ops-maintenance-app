@@ -1,2 +1,4 @@
-# Site Portal runs on the Python standard library only — no dependencies.
-# This file exists so Render's native Python runtime is detected.
+# Site Portal — Python standard library, plus:
+#   Pillow — resizes pending-entry photos on upload and builds list thumbnails.
+#            If it is not installed the app still runs and stores photos as-is.
+pillow>=10,<13

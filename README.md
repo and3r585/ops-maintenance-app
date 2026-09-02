@@ -1,12 +1,14 @@
 # Site Portal
 
 Role-based operations / maintenance tool with task planning and asset tracking.
-Runs on **Python 3 standard library only** — no `pip install`, no Node, no internet.
+Runs on the **Python 3 standard library**, plus **Pillow** for resizing pending-entry
+photos. No Node, no build step. (Without Pillow the app still runs and stores photos as-is.)
 
 ## Run
 
 ```bash
 cd "ops-app"
+pip install -r requirements.txt   # Pillow
 python3 app.py
 ```
 
@@ -42,7 +44,7 @@ serverless platforms like Vercel/Netlify (no long-running process, ephemeral fil
 Use a host that runs a real process:
 
 1. In the [Render](https://render.com) dashboard: **New → Blueprint** and pick this repo.
-2. Render reads [`render.yaml`](render.yaml), builds (nothing to install) and starts `python app.py`.
+2. Render reads [`render.yaml`](render.yaml), runs `pip install -r requirements.txt` and starts `python app.py`.
 3. Log in with `admin` and the generated `ADMIN_PASSWORD` (Environment tab of the service).
 
 [`render.yaml`](render.yaml) is configured for **durable storage**: the `starter` plan with a
@@ -157,6 +159,11 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
     numbers, quantities, service order); a technician completes with a mandatory comment +
     evidence photo. The **#/pendings** list (from the dashboard) filters by status and its
     **Export (CSV)** button exports exactly the current filter.
+    Photos are resized to 4000&nbsp;px / q90 on upload (Pillow) and get a 480&nbsp;px list
+    thumbnail; the list shows the thumbnail, clicking opens the full image. Files live in
+    `data/uploads/` and are served with a one-year immutable cache. Every photo URL is built
+    by `photo_url()` / `photo_thumb_url()` in `app.py` — the single seam for moving the store
+    to object storage (e.g. Cloudflare R2) later.
 
 ## Data
 
@@ -189,13 +196,13 @@ in `web/app.js`.
 ## Layout
 
 ```
-app.py            server + schema + seed orchestration (stdlib only)
+app.py            server + schema + seed orchestration + photo handling
 seed_data.py      CSV parsers -> structures the seeder consumes
-source/*.csv      one CSV per source-spreadsheet tab
+source/*.csv      one CSV per source-spreadsheet tab (one-time import)
 render.yaml       Render deploy blueprint
-requirements.txt  empty (marks the repo as Python for Render)
+requirements.txt  Pillow
 web/index.html    SPA shell
 web/app.js        views, router, planning board
 web/styles.css    Claude-inspired theme (light + dark, follows OS, manual toggle ◐)
-data/             created at runtime — SQLite db + uploaded photos
+data/             created at runtime — SQLite db + uploaded photos (+ _thumb.jpg)
 ```

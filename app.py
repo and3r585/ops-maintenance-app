@@ -33,12 +33,104 @@ from urllib.parse import urlparse, parse_qs
 
 import seed_data
 
+try:
+    from PIL import Image, ImageOps
+    _HAVE_PIL = True
+except ImportError:                       # app still runs; photos are stored as-is
+    _HAVE_PIL = False
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
 # $DATA_DIR lets a host point the SQLite DB + uploads at a persistent disk.
 DATA_DIR = os.environ.get("DATA_DIR") or os.path.join(BASE_DIR, "data")
 UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
 DB_PATH = os.path.join(DATA_DIR, "app.db")
+
+# --- pending-entry photos ---------------------------------------------------
+# The store is a plain directory today; every reference goes through photo_url()
+# / photo_thumb_url() so it can move to object storage (e.g. Cloudflare R2) later
+# by editing just those two functions and the upload write path.
+PHOTO_MAX_EDGE = 4000      # longest edge kept on the full image (px)
+PHOTO_THUMB_EDGE = 480     # longest edge of the list thumbnail (px)
+PHOTO_JPEG_Q = 90          # full-image re-encode quality (visually lossless)
+PHOTO_THUMB_Q = 80
+PHOTO_RAW_CAP = 25 * 1024 * 1024   # byte ceiling for the decode / raw-fallback
+
+
+def photo_url(filename):
+    return "/uploads/" + filename
+
+
+def thumb_name(filename):
+    return os.path.splitext(filename)[0] + "_thumb.jpg"
+
+
+def photo_thumb_url(filename):
+    t = thumb_name(filename)
+    return "/uploads/" + (t if os.path.isfile(os.path.join(UPLOAD_DIR, t)) else filename)
+
+
+def _encode_image(im, fmt, quality):
+    buf = io.BytesIO()
+    if fmt == "PNG":
+        im.save(buf, "PNG", optimize=True)
+    else:
+        if im.mode not in ("RGB", "L"):
+            im = im.convert("RGB")
+        im.save(buf, "JPEG", quality=quality, optimize=True, progressive=True)
+    return buf.getvalue()
+
+
+def process_image(content, ext):
+    """(main_bytes, main_ext, thumb_bytes|None). Downscales past PHOTO_MAX_EDGE and
+    re-encodes; small images pass through untouched. Falls back to the raw bytes if
+    the file can't be decoded (e.g. HEIC without a plugin)."""
+    raw = content[:PHOTO_RAW_CAP]
+    if not _HAVE_PIL:
+        return raw, ext, None
+    try:
+        im = ImageOps.exif_transpose(Image.open(io.BytesIO(content)))
+    except Exception:
+        return raw, ext, None
+    keep_png = ext == ".png" and im.mode in ("RGBA", "LA", "P")
+    fmt, out_ext = ("PNG", ".png") if keep_png else ("JPEG", ".jpg")
+
+    resized = max(im.size) > PHOTO_MAX_EDGE
+    if not resized and len(content) <= 2 * 1024 * 1024:
+        main_bytes, out_ext = raw, ext          # already small — no generation loss
+    else:
+        main = im.copy()
+        if resized:
+            main.thumbnail((PHOTO_MAX_EDGE, PHOTO_MAX_EDGE), Image.LANCZOS)
+        main_bytes = _encode_image(main, fmt, PHOTO_JPEG_Q)
+
+    thumb = im.copy()
+    thumb.thumbnail((PHOTO_THUMB_EDGE, PHOTO_THUMB_EDGE), Image.LANCZOS)
+    thumb_bytes = _encode_image(thumb, "JPEG", PHOTO_THUMB_Q)
+    return main_bytes, out_ext, thumb_bytes
+
+
+def backfill_thumbs():
+    """Generate any missing list thumbnails for photos already on disk (one-off, cheap)."""
+    if not _HAVE_PIL or not os.path.isdir(UPLOAD_DIR):
+        return
+    conn = get_db()
+    made = 0
+    for r in conn.execute("SELECT filename FROM pending_photos"):
+        src = os.path.join(UPLOAD_DIR, r["filename"])
+        dst = os.path.join(UPLOAD_DIR, thumb_name(r["filename"]))
+        if not os.path.isfile(src) or os.path.isfile(dst):
+            continue
+        try:
+            im = ImageOps.exif_transpose(Image.open(src))
+            im.thumbnail((PHOTO_THUMB_EDGE, PHOTO_THUMB_EDGE), Image.LANCZOS)
+            open(dst, "wb").write(_encode_image(im, "JPEG", PHOTO_THUMB_Q))
+            made += 1
+        except Exception:
+            pass
+    conn.close()
+    if made:
+        print("  thumbnails   generated %d missing" % made)
 
 # ---------------------------------------------------------------------------
 # Database
@@ -804,7 +896,8 @@ class Handler(BaseHTTPRequestHandler):
             for ph in conn.execute("SELECT pending_entry_id, filename, kind FROM pending_photos"):
                 if ph["pending_entry_id"] in by_id:
                     by_id[ph["pending_entry_id"]]["photos"].append(
-                        {"url": "/uploads/" + ph["filename"], "kind": ph["kind"]})
+                        {"url": photo_url(ph["filename"]),
+                         "thumb": photo_thumb_url(ph["filename"]), "kind": ph["kind"]})
             counts = {s: 0 for s in ("SUBMITTED", "REVIEWED", "COMPLETED")}
             for r in conn.execute("SELECT status, COUNT(*) c FROM pending_entries GROUP BY status"):
                 counts[r["status"]] = r["c"]
@@ -1235,9 +1328,13 @@ class Handler(BaseHTTPRequestHandler):
             ext = os.path.splitext(f["filename"])[1].lower()
             if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic"):
                 ext = ".jpg"
-            fname = "p%d_%s%s" % (entry_id, secrets.token_hex(6), ext)
+            main_bytes, out_ext, thumb_bytes = process_image(f["content"], ext)
+            fname = "p%d_%s%s" % (entry_id, secrets.token_hex(6), out_ext)
             with open(os.path.join(UPLOAD_DIR, fname), "wb") as out:
-                out.write(f["content"][:15 * 1024 * 1024])
+                out.write(main_bytes)
+            if thumb_bytes:
+                with open(os.path.join(UPLOAD_DIR, thumb_name(fname)), "wb") as out:
+                    out.write(thumb_bytes)
             conn.execute(
                 "INSERT INTO pending_photos (pending_entry_id,filename,caption,kind,created_at) "
                 "VALUES (?,?,?,?,?)", (entry_id, fname, "", kind, now()),
@@ -1270,7 +1367,25 @@ class Handler(BaseHTTPRequestHandler):
         full = os.path.join(UPLOAD_DIR, name)
         if not os.path.isfile(full):
             raise ApiError(404, "Not found")
-        self._send_file(full)
+        # Upload filenames are content-unique and never rewritten -> cache hard.
+        lastmod = time.strftime("%a, %d %b %Y %H:%M:%S GMT",
+                                time.gmtime(os.stat(full).st_mtime))
+        cache = "public, max-age=31536000, immutable"
+        if self.headers.get("If-Modified-Since") == lastmod:
+            self.send_response(304)
+            self.send_header("Cache-Control", cache)
+            self.end_headers()
+            return
+        ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
+        with open(full, "rb") as f:
+            data = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", cache)
+        self.send_header("Last-Modified", lastmod)
+        self.end_headers()
+        self.wfile.write(data)
 
     def _serve_static(self, path):
         if path in ("/", ""):
@@ -1406,7 +1521,8 @@ def load_pendings(conn, asset_id):
             (r["id"],),
         ).fetchall()
         d = dict(r)
-        d["photos"] = [{"id": p["id"], "url": "/uploads/" + p["filename"],
+        d["photos"] = [{"id": p["id"], "url": photo_url(p["filename"]),
+                        "thumb": photo_thumb_url(p["filename"]),
                         "caption": p["caption"], "kind": p["kind"]} for p in photos]
         d["parts"] = [dict(p) for p in parts]
         out.append(d)
@@ -1434,6 +1550,7 @@ def main():
         fresh = True
         print("  !! --reset: wiped data/app.db (all app-entered pendings and edits gone)")
     seed()
+    backfill_thumbs()
 
     conn = get_db()
     n_pend = conn.execute("SELECT COUNT(*) c FROM pending_entries").fetchone()["c"]
@@ -1451,6 +1568,9 @@ def main():
     print("  database     %s  (%s)" % (DB_PATH, "freshly seeded" if fresh else "existing, kept"))
     print("  contents     %d pending entries (%d added in-app), %d logged record edits"
           % (n_pend, n_app, n_edits))
+    print("  photos       %s" % ("Pillow ready — uploads resized to %dpx, thumbnails on"
+                                 % PHOTO_MAX_EDGE if _HAVE_PIL
+                                 else "Pillow NOT installed — photos stored as-is (pip install pillow)"))
     print("  note         app-entered data lives in data/ — plain `python3 app.py` keeps it;")
     print("               `--reset` deletes it. Nothing else wipes the DB.")
     print("  stop         Ctrl-C\n")
