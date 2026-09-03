@@ -23,6 +23,7 @@ SMP_FILE = "KGH_SMP.csv"
 # only to rebuild a completely empty database.
 DATA_FILES = {
     "kgh2025": "KGH_2025.csv",
+    "svcdates": "KGH_Service_Dates.csv",
     "retro": "25_KGH_Retro.csv",
     "hv": "HV.csv",
     "stats": "Stats.csv",
@@ -116,36 +117,63 @@ def make_username(full, taken):
 # ---------------------------------------------------------------------------
 
 def _kgh2025(rows):
-    """KGH_2025.csv -> (turbine order, services, defects, blade records)."""
-    #  col (None = no source column yet -> always Null, date added in-app), name, sort
-    SVC = [
-        (9, "72 Month Major Service"), (13, "84 Month Major Service"),
-        (19, "90 Month Major Service"), (25, "96 Month Major Service"),
-        (30, "102 Month Minor Service"), (35, "108 Month Major Service"),
-        (46, "5-Year Oil Exchange"),
-        (41, "114 Month Major Service"), (None, "120 Month Major Service"),
-        (None, "126 Month Major Service"), (None, "132 Month Major Service"),
-    ]
+    """KGH_2025.csv -> (turbine order, defect notes, blade-inspection records).
+
+    Service dates come from KGH_Service_Dates.csv now — see _service_dates()."""
     BLADE = [
         (57, "Blade drone inspection"),
     ]
-    order, services, defects, blades = [], {}, {}, {}
+    order, defects, blades = [], {}, {}
     for row in rows[1:]:
         tag = norm_tag(_get(row, 0))
         if not tag:
             continue
         order.append(tag)
-        services[tag] = [
-            {"name": nm, "date": (parse_date(_get(row, ci)) if ci is not None else None),
-             "detail": None, "sort": si}
-            for si, (ci, nm) in enumerate(SVC)
-        ]
         blades[tag] = [
             {"name": nm, "date": parse_date(_get(row, ci)), "detail": None, "sort": si}
             for si, (ci, nm) in enumerate(BLADE)
         ]
         defects[tag] = clean(_get(row, 6))  # "Defects / Issues affecting work and/or operation"
-    return order, services, defects, blades
+    return order, defects, blades
+
+
+# The comprehensive service schedule, in order. Column 0 of KGH_Service_Dates.csv is
+# the turbine tag; columns 1.. are these services. A cell holds either a completion
+# date or a status literal ('Not required' / 'Not Completed' / 'TBC'), which is kept
+# verbatim as the record's detail.
+_SVC_DATES = [
+    "3 Month Service - Tower and Nacelle", "3 Month Service - Rotor",
+    "3 Month Service - Foundation and TX", "6 Month Major Service",
+    "12 Month Major Service", "18 Month Minor Service", "24 Month Major Service",
+    "30 Month Minor Service", "36 Month Major Service", "42 Month Minor Service",
+    "48 Month Major Service", "54 Month Minor Service", "60 Month Major Service",
+    "66 Month Minor Service", "72 Month Major Service", "78 Month Minor Service",
+    "84 Month Major Service", "90 Month Major Service", "96 Month Major Service",
+    "102 Month Minor Service", "108 Month Major Service", "114 Month Major Service",
+    "120 Month Major Service", "126 Month Major Service", "132 Month Major Service",
+    "5-Year Oil Exchange", "10-Year Oil Exchange",
+]
+
+
+def _service_dates(rows):
+    """KGH_Service_Dates.csv -> {tag: [{name, date, detail, sort}, ...]}."""
+    out = {}
+    for row in rows[1:]:
+        tag = norm_tag(_get(row, 0))
+        if not tag:
+            continue
+        recs = []
+        for i, name in enumerate(_SVC_DATES):
+            raw = _get(row, i + 1)
+            date = parse_date(raw)
+            recs.append({
+                "name": name,
+                "date": date,
+                "detail": None if (date or not raw) else raw,
+                "sort": i,
+            })
+        out[tag] = recs
+    return out
 
 
 def _hv(rows):
@@ -435,15 +463,21 @@ def load_smp():
     return _smp(_rows(os.path.join(SOURCE_DIR, SMP_FILE)))
 
 
+def load_service_dates():
+    """The comprehensive service schedule. Applied once (see app._replace_service_records);
+    after that, service completions are edited in the app."""
+    return _service_dates(_data_rows("svcdates"))
+
+
 def load_data():
     """The one-time turbine / asset / history import from source/_archived/*.csv.
     Only called when the database is completely empty."""
-    order, services, defects, blades = _kgh2025(_data_rows("kgh2025"))
+    order, defects, blades = _kgh2025(_data_rows("kgh2025"))
     names, roster = _manplan(_data_rows("manplan"))
     return {
         "turbines": order,
         "technicians": names,
-        "services": services,
+        "services": _service_dates(_data_rows("svcdates")),
         "defects": defects,
         "blades": blades,
         "hv": _hv(_data_rows("hv")),

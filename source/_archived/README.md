@@ -19,7 +19,8 @@ superseded by `source/KGH_SMP.csv`.
 
 | File | From | Fed |
 |---|---|---|
-| `KGH_2025.csv` | KGH 2025 tab | turbine register, defect notes, service dates, blade drone inspection |
+| `KGH_2025.csv` | KGH 2025 tab | turbine register, defect notes, blade drone inspection |
+| `KGH_Service_Dates.csv` | KGH Service dates_Comprehensive → "Service dates" tab | full service schedule (27 services incl. two oil exchanges) — applied once, then edited in-app |
 | `HV.csv` | HV tab | HV maintenance history |
 | `Stats.csv` | Stats tab | statutory + lift inspections |
 | `25_KGH_Retro.csv` | 25 KGH Retro tab | 20 retrofit campaigns + status |

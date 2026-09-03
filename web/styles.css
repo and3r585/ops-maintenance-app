@@ -264,6 +264,7 @@ textarea { resize: vertical; min-height: 90px; }
 .svc-table td:first-child { font-weight: 550; white-space: normal; }
 .svc-table td.svc-planned { color: var(--text-soft); font-variant-numeric: tabular-nums; }
 .svc-table td.svc-done { text-align: right; padding-right: 0; }
+.svc-note { display: block; font-size: .78rem; color: var(--text-soft); font-style: italic; }
 
 /* ---- work order history ---- */
 .wo { padding: .7rem 0; border-top: 1px solid var(--border); }

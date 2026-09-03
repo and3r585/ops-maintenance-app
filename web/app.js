@@ -1162,7 +1162,8 @@ async function viewAsset(id) {
       tb.append(h("tr", {},
         h("td", {}, r.name),
         h("td", { class: "svc-planned" }, planned ? fmtDate(planned) : "—"),
-        h("td", { class: "svc-done" }, dateCell(r, drawTab))));
+        h("td", { class: "svc-done" }, dateCell(r, drawTab),
+          (!r.date && r.detail) ? h("span", { class: "svc-note" }, r.detail) : null)));
       prev = { months, date: r.date };
     }
     card.append(h("div", { class: "svc-scroll" },
@@ -1176,10 +1177,13 @@ async function viewAsset(id) {
     if (oil.length) {
       const oc = h("div", { class: "card" }, h("h3", {}, "Oil exchange"),
         h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
-          "5-year gear-oil exchange — tracked separately from the major / minor services."));
+          "Gear-oil exchanges — tracked separately from the major / minor services."));
       const list = h("div", { class: "rec-list" });
       for (const r of oil) list.append(h("div", { class: "rec-row" },
-        h("div", { class: "rec-name" }, r.name), dateCell(r, drawTab)));
+        h("div", { class: "rec-name" }, r.name),
+        h("span", { class: "rec-date-edit" },
+          (!r.date && r.detail) ? h("span", { class: "svc-note" }, r.detail) : null,
+          dateCell(r, drawTab))));
       oc.append(list);
       wrap.append(oc);
     }

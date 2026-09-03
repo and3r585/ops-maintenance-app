@@ -283,6 +283,12 @@ CREATE TABLE IF NOT EXISTS modules (
     min_role TEXT NOT NULL DEFAULT 'TECHNICIAN',
     sort     INTEGER NOT NULL DEFAULT 0
 );
+
+-- small key/value store for one-shot data migrations and app-wide flags
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 
@@ -365,6 +371,19 @@ def seed():
     # --- users: synced from source/Credentials.csv on every start (+ `admin` break-glass) ---
     sync_users(conn, seed_data.load_credentials())
 
+    # --- one-shot: replace every service record from the comprehensive service-date
+    #     export (KGH Service dates_Comprehensive). Runs once against an existing
+    #     database; on a brand-new database _first_time_import loads the same data, so
+    #     this only sets the flag. Service completions are editable in the app, so this
+    #     never re-runs — later corrections are made in the app, not the file. ---
+    if not _meta_get(conn, "service_dates_comprehensive"):
+        if conn.execute(
+            "SELECT COUNT(*) c FROM asset_records WHERE category = 'service'"
+        ).fetchone()["c"]:
+            n = _replace_service_records(conn, seed_data.load_service_dates())
+            print("  replaced     %d service records from the comprehensive export" % n)
+        _meta_set(conn, "service_dates_comprehensive", "1")
+
     # --- one-time turbine / asset / history import.
     #     Runs ONLY when the database has never been populated. Once assets exist the
     #     database is the sole source of truth and source/_archived/*.csv is never read.
@@ -392,6 +411,36 @@ def seed():
 
     conn.commit()
     conn.close()
+
+
+def _meta_get(conn, key):
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def _meta_set(conn, key, value):
+    conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+
+
+def _replace_service_records(conn, svc_by_tag):
+    """Discard all category='service' asset_records and re-insert from the
+    comprehensive export. svc_by_tag: {tag: [{name, date, detail, sort}, ...]}."""
+    aid = {r["tag"]: r["id"] for r in conn.execute("SELECT id, tag FROM assets")}
+    conn.execute("DELETE FROM asset_records WHERE category = 'service'")
+    n = 0
+    for tag, recs in svc_by_tag.items():
+        if tag not in aid:
+            continue
+        for r in recs:
+            conn.execute(
+                "INSERT INTO asset_records (asset_id,category,name,occurred_on,detail,sort) "
+                "VALUES (?,?,?,?,?,?)",
+                (aid[tag], "service", r["name"], r.get("date"), r.get("detail"),
+                 r.get("sort", 0)),
+            )
+            n += 1
+    return n
 
 
 def _first_time_import(conn):
