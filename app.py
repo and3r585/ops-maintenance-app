@@ -1691,6 +1691,12 @@ def _guard_reset(force):
 
 
 def main():
+    # Line-buffer stdout so the startup banner / migration lines reach hosted logs
+    # even without $PYTHONUNBUFFERED.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
     # A hosted process (Render/Railway/Fly/…) sets $PORT and needs 0.0.0.0.
     env_port = os.environ.get("PORT")
     ap = argparse.ArgumentParser()

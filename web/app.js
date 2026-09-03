@@ -1158,7 +1158,9 @@ async function viewAsset(id) {
     let prev = null;
     for (const r of svc) {
       const months = monthOf(r.name);
-      const planned = (prev && prev.date) ? addMonthsISO(prev.date, months - prev.months) : "";
+      // the three 3-month commissioning services have no planned date
+      const planned = (months === 3 || !(prev && prev.date))
+        ? "" : addMonthsISO(prev.date, months - prev.months);
       tb.append(h("tr", {},
         h("td", {}, r.name),
         h("td", { class: "svc-planned" }, planned ? fmtDate(planned) : "—"),
@@ -1178,12 +1180,19 @@ async function viewAsset(id) {
       const oc = h("div", { class: "card" }, h("h3", {}, "Oil exchange"),
         h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
           "Gear-oil exchanges — tracked separately from the major / minor services."));
+      const fiveYr = oil.find(r => /5-year/i.test(r.name));
       const list = h("div", { class: "rec-list" });
-      for (const r of oil) list.append(h("div", { class: "rec-row" },
-        h("div", { class: "rec-name" }, r.name),
-        h("span", { class: "rec-date-edit" },
-          (!r.date && r.detail) ? h("span", { class: "svc-note" }, r.detail) : null,
-          dateCell(r, drawTab))));
+      for (const r of oil) {
+        // 10-year exchange is planned for 5 years after the 5-year exchange
+        const planned = (/10-year/i.test(r.name) && fiveYr && fiveYr.date)
+          ? addMonthsISO(fiveYr.date, 60) : "";
+        list.append(h("div", { class: "rec-row" },
+          h("div", { class: "rec-name" }, r.name),
+          h("span", { class: "rec-date-edit" },
+            (!r.date && planned) ? h("span", { class: "svc-note" }, "Planned " + fmtDate(planned)) : null,
+            (!r.date && r.detail) ? h("span", { class: "svc-note" }, r.detail) : null,
+            dateCell(r, drawTab))));
+      }
       oc.append(list);
       wrap.append(oc);
     }
