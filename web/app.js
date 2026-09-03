@@ -1707,7 +1707,7 @@ async function viewRoster() {
       dayContent(cell, iso);
       grid.append(cell);
     }
-    return grid;
+    return h("div", { class: "cal-scroll" }, grid);
   }
   const codeChip = (code) => h("span", { class: "rcode r-" + codeSlug(code), title: codeLabel(code) }, code);
 
