@@ -1065,7 +1065,7 @@ class Handler(BaseHTTPRequestHandler):
             self._require(conn)
             want = (query.get("status", [""])[0] or "").upper()
             sql = (
-                "SELECT a.tag AS turbine, p.wo_code, p.priority, p.system, p.status, "
+                "SELECT a.tag AS turbine, p.priority, p.system, p.status, "
                 "u.display_name AS logged_by, p.created_at, p.note, p.parts_service_order, "
                 "cu.display_name AS completed_by_name, p.completed_at, p.completed_note, "
                 "(SELECT COUNT(*) FROM pending_photos ph WHERE ph.pending_entry_id = p.id) AS photos, "
@@ -1084,12 +1084,12 @@ class Handler(BaseHTTPRequestHandler):
             rows = conn.execute(sql, args).fetchall()
             buf = io.StringIO()
             w = csv.writer(buf)
-            w.writerow(["Turbine", "WO code", "Priority", "System", "Status", "Logged by",
+            w.writerow(["Turbine", "Priority", "System", "Status", "Logged by",
                         "Date", "Note", "Parts SO", "Parts", "Completed by",
                         "Completed", "Completion note", "Photos"])
             for r in rows:
                 w.writerow([
-                    r["turbine"], r["wo_code"] or "",
+                    r["turbine"],
                     r["priority"] if r["priority"] is not None else "",
                     r["system"] or "", r["status"], r["logged_by"],
                     (r["created_at"] or "")[:10],
@@ -1106,15 +1106,28 @@ class Handler(BaseHTTPRequestHandler):
         # admin sets Submitted <-> Reviewed (and can reopen a Completed entry)
         if len(parts) == 2 and parts[0] == "pendings" and method == "PATCH":
             self._require(conn, "ADMIN")
-            row = conn.execute("SELECT status FROM pending_entries WHERE id = ?", (parts[1],)).fetchone()
+            row = conn.execute("SELECT status, priority FROM pending_entries WHERE id = ?",
+                               (parts[1],)).fetchone()
             if not row:
                 raise ApiError(404, "Pending entry not found")
-            status = (self._json_body().get("status") or "").upper()
+            data = self._json_body()
+            status = (data.get("status") or "").upper()
             if status not in ("SUBMITTED", "REVIEWED"):
                 raise ApiError(400, "Admin can set Submitted or Reviewed. "
                                     "Completion is done by a technician with evidence.")
-            conn.execute("UPDATE pending_entries SET status = ? WHERE id = ?", (status, parts[1]))
-            if status == "SUBMITTED":  # leaving Reviewed drops any parts reservation
+            if status == "REVIEWED":
+                # a priority of 1-5 must be set before an entry can be reviewed
+                pr = data.get("priority", row["priority"])
+                try:
+                    pr = int(pr)
+                except (TypeError, ValueError):
+                    pr = None
+                if pr is None or not (1 <= pr <= 5):
+                    raise ApiError(400, "Assign a priority of 1-5 before marking this entry Reviewed.")
+                conn.execute("UPDATE pending_entries SET status = ?, priority = ? WHERE id = ?",
+                             (status, pr, parts[1]))
+            else:  # leaving Reviewed drops any parts reservation
+                conn.execute("UPDATE pending_entries SET status = ? WHERE id = ?", (status, parts[1]))
                 conn.execute("DELETE FROM pending_parts WHERE pending_entry_id = ?", (parts[1],))
                 conn.execute("UPDATE pending_entries SET parts_service_order = NULL, "
                              "parts_reserved_at = NULL WHERE id = ?", (parts[1],))
@@ -1290,7 +1303,7 @@ class Handler(BaseHTTPRequestHandler):
                     ])
                 sheets.append((label, data))
             prows = conn.execute(
-                "SELECT a.tag, p.wo_code, p.status, p.note, p.created_at, "
+                "SELECT a.tag, p.priority, p.status, p.note, p.created_at, "
                 "p.parts_reserved_at, p.completed_at, cu.display_name AS completed_by_name "
                 "FROM pending_entries p JOIN assets a ON a.id = p.asset_id "
                 "LEFT JOIN users cu ON cu.id = p.completed_by "
@@ -1300,11 +1313,11 @@ class Handler(BaseHTTPRequestHandler):
                 "ORDER BY a.tag, p.created_at",
                 (frm, to, frm, to, frm, to)).fetchall()
             if prows:
-                data = [["Turbine", "WO code", "Status", "Created", "Parts reserved",
+                data = [["Turbine", "Priority", "Status", "Created", "Parts reserved",
                          "Completed", "Completed by", "Note"]]
                 for r in prows:
                     data.append([
-                        r["tag"], r["wo_code"] or "", r["status"],
+                        r["tag"], r["priority"] if r["priority"] is not None else "", r["status"],
                         (r["created_at"] or "")[:10], (r["parts_reserved_at"] or "")[:10],
                         (r["completed_at"] or "")[:10], r["completed_by_name"] or "",
                         (r["note"] or "").replace("\r\n", " ").replace("\n", " "),
@@ -1456,10 +1469,10 @@ def load_plan(conn, date):
             title = title[:88].rstrip() + "…"
         return {"id": row["id"], "title": title or "(no description)",
                 "asset_tag": row["asset_tag"], "priority": row["priority"],
-                "wo_code": row["wo_code"], "status": row["status"]}
+                "status": row["status"]}
 
     placed = conn.execute(
-        "SELECT t.team_no, p.id, p.note, p.priority, p.wo_code, p.status, a.tag AS asset_tag "
+        "SELECT t.team_no, p.id, p.note, p.priority, p.status, a.tag AS asset_tag "
         "FROM plan_team t JOIN pending_entries p ON p.id = t.pending_id "
         "JOIN assets a ON a.id = p.asset_id WHERE t.plan_date = ?",
         (date,),
@@ -1478,7 +1491,7 @@ def load_plan(conn, date):
     # backlog = open pending entries an admin has reviewed (triaged, ready to schedule),
     # highest priority first, capped so the rail stays usable.
     rows = conn.execute(
-        "SELECT p.id, p.note, p.priority, p.wo_code, p.status, a.tag AS asset_tag "
+        "SELECT p.id, p.note, p.priority, p.status, a.tag AS asset_tag "
         "FROM pending_entries p JOIN assets a ON a.id = p.asset_id "
         "WHERE p.status = 'REVIEWED' "
         "ORDER BY p.priority IS NULL, p.priority, p.created_at LIMIT 60"

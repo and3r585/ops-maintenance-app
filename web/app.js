@@ -73,6 +73,11 @@ const addDaysISO = (iso, days) => {
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 };
+const addMonthsISO = (iso, months) => {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCMonth(d.getUTCMonth() + months);
+  return d.toISOString().slice(0, 10);
+};
 
 function toast(msg, isErr = false) {
   const t = h("div", { class: "toast" + (isErr ? " err" : "") }, msg);
@@ -84,6 +89,33 @@ function toast(msg, isErr = false) {
 function lightbox(src) {
   const lb = h("div", { class: "lightbox", onclick: () => lb.remove() }, h("img", { src }));
   document.body.append(lb);
+}
+
+/* Approval modal — same "review then save" step as the Data Explorer.
+   rows: [{ label, was, now }]. Resolves true on approve, false otherwise. */
+function approveChange(title, rows) {
+  return new Promise((resolve) => {
+    const backdrop = h("div", { class: "modal-backdrop" });
+    const onKey = (e) => { if (e.key === "Escape") finish(false); };
+    const finish = (ok) => { backdrop.remove(); document.removeEventListener("keydown", onKey); resolve(ok); };
+    const table = h("table", { class: "review-table" },
+      h("thead", {}, h("tr", {}, h("th", {}, "Field"), h("th", {}, "Was"), h("th", {}, ""), h("th", {}, "New"))),
+      h("tbody", {}, ...rows.map(r => h("tr", {},
+        h("td", {}, r.label),
+        h("td", { class: "old" }, r.was || "—"),
+        h("td", {}, "→"),
+        h("td", { class: "new" }, r.now || "(cleared)")))));
+    backdrop.append(h("div", { class: "modal" },
+      h("h3", {}, title || "Approve change"),
+      h("p", { class: "hint" }, "This is written to the database and recorded in the change log."),
+      h("div", { class: "review-scroll" }, table),
+      h("div", { class: "btn-row", style: "justify-content:flex-end;margin-top:1rem" },
+        h("button", { class: "btn ghost", onclick: () => finish(false) }, "Cancel"),
+        h("button", { class: "btn primary", onclick: () => finish(true) }, "Approve & save"))));
+    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) finish(false); });
+    document.addEventListener("keydown", onKey);
+    document.body.append(backdrop);
+  });
 }
 
 function navigate(hash) { window.location.hash = hash; }
@@ -106,7 +138,6 @@ function pendingItem(p, opts) {
       ? h("a", { href: "#/asset/" + p.asset_id + "?tab=Pendings", class: "wo-so" }, p.turbine)
       : h("span", { class: "wo-so" }, p.turbine));
   }
-  if (p.wo_code) meta.push(h("span", { class: "wo-so" }, "WO " + p.wo_code));
   if (p.priority != null) meta.push(h("span", { class: "pri-tag p" + p.priority }, "Priority " + p.priority));
   if (p.system) meta.push(h("span", {}, p.system));
 
@@ -143,7 +174,8 @@ function pendingItem(p, opts) {
   // actions
   const acts = h("div", { class: "btn-row", style: "margin-top:.7rem" });
   if (p.status === "SUBMITTED" && isAdmin) {
-    acts.append(h("button", { class: "btn sm primary", onclick: () => patchStatus("REVIEWED") }, "Mark reviewed"));
+    acts.append(h("button", { class: "btn sm primary",
+      onclick: () => { if (!card.querySelector(".review-form")) card.append(reviewForm()); } }, "Mark reviewed"));
   }
   if (p.status === "REVIEWED") {
     if (isAdmin) {
@@ -166,6 +198,32 @@ function pendingItem(p, opts) {
       await api("/pendings/" + p.id, { method: "PATCH", body: { status } });
       toast("Marked " + cap(status)); reload();
     } catch (e) { toast(e.message, true); }
+  }
+
+  // Reviewing requires a priority of 1-5.
+  function reviewForm() {
+    const box = h("div", { class: "inline-form review-form" });
+    const sel = h("select", {}, h("option", { value: "" }, "Choose priority…"),
+      ...[1, 2, 3, 4, 5].map(n => h("option", { value: n }, "Priority " + n
+        + (n === 1 ? " (highest)" : n === 5 ? " (lowest)" : ""))));
+    if (p.priority >= 1 && p.priority <= 5) sel.value = String(p.priority);
+    const err = h("div", { class: "form-error" });
+    const go = h("button", { class: "btn sm primary", type: "button" }, "Mark reviewed");
+    go.onclick = async () => {
+      const pr = parseInt(sel.value, 10);
+      if (!(pr >= 1 && pr <= 5)) { err.textContent = "Pick a priority between 1 and 5."; return; }
+      go.disabled = true;
+      try {
+        await api("/pendings/" + p.id, { method: "PATCH", body: { status: "REVIEWED", priority: pr } });
+        toast("Marked reviewed · priority " + pr); reload();
+      } catch (e) { go.disabled = false; err.textContent = e.message; }
+    };
+    box.append(
+      h("label", {}, "Assign a priority (1 highest – 5 lowest) to review this entry"),
+      sel, err,
+      h("div", { class: "btn-row" }, go,
+        h("button", { class: "btn sm ghost", type: "button", onclick: () => box.remove() }, "Cancel")));
+    return box;
   }
 
   function partsForm() {
@@ -799,7 +857,7 @@ async function viewAsset(id) {
 
   const panes = {
     "Details": detailsPane,
-    "Service dates": () => recordPane("service", detail.services, "No service dates recorded for this turbine."),
+    "Service dates": servicePane,
     "HV history": () => datePane("HV maintenance history",
       "Completion dates from the HV tab of the KGH Virtual Whiteboard."
       + (isAdmin ? " The 2026/27 and 2027/28 campaigns have no source date yet — add one to record completion." : ""),
@@ -836,11 +894,19 @@ async function viewAsset(id) {
       clear(wrap);
       const inp = h("input", { type: "date", value: rec.date || "", style: "width:auto" });
       const save = async (val) => {
+        const nv = (val || "").trim(), ov = rec.date || "";
+        if (nv === ov) { render(); return; }
+        const ok = await approveChange("Approve date change", [{
+          label: rec.name,
+          was: ov ? fmtDate(ov) : "",
+          now: nv ? fmtDate(nv) : "",
+        }]);
+        if (!ok) { render(); return; }
         try {
-          const r = await api("/records/" + rec.id, { method: "PATCH", body: { occurred_on: val } });
+          const r = await api("/records/" + rec.id, { method: "PATCH", body: { occurred_on: nv } });
           rec.date = r.occurred_on;
           if (r.status) rec.status = r.status;
-          toast(val ? "Date saved" : "Date cleared");
+          toast(nv ? "Date saved" : "Date cleared");
           if (reload) reload(); else render();
         } catch (e) { toast(e.message, true); render(); }
       };
@@ -973,29 +1039,66 @@ async function viewAsset(id) {
             a.smp_observations || "None recorded."))) : null);
   }
 
+  /* Service dates: a Planned / Completed schedule + a separate Oil-exchange box. */
+  function servicePane() {
+    const monthOf = (n) => { const m = /^(\d+)\s*month/i.exec(n || ""); return m ? +m[1] : null; };
+    const all = detail.services || [];
+    const oil = all.filter(r => monthOf(r.name) === null);
+    const svc = all.filter(r => monthOf(r.name) !== null)
+                   .sort((x, y) => monthOf(x.name) - monthOf(y.name));
+    const wrap = h("div", {});
+
+    const done = svc.filter(r => r.date).length;
+    const card = h("div", { class: "card" },
+      h("h3", {}, "Service schedule"),
+      h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
+        `${done} of ${svc.length} services completed. `
+        + "Planned = the previous service's completion date plus the interval"
+        + (isAdmin ? "; set a completion date to advance the schedule." : ".")));
+
+    const tb = h("tbody", {});
+    let prev = null;
+    for (const r of svc) {
+      const months = monthOf(r.name);
+      const planned = (prev && prev.date) ? addMonthsISO(prev.date, months - prev.months) : "";
+      tb.append(h("tr", {},
+        h("td", {}, r.name),
+        h("td", { class: "svc-planned" }, planned ? fmtDate(planned) : "—"),
+        h("td", { class: "svc-done" }, dateCell(r, drawTab))));
+      prev = { months, date: r.date };
+    }
+    card.append(h("div", { class: "svc-scroll" },
+      h("table", { class: "svc-table" },
+        h("thead", {}, h("tr", {},
+          h("th", {}, "Service"), h("th", {}, "Planned"), h("th", {}, "Completed"))),
+        tb)));
+    wrap.append(card);
+    if (!svc.length) { clear(card); card.append(h("div", { class: "empty-state" }, "No service dates recorded for this turbine.")); }
+
+    if (oil.length) {
+      const oc = h("div", { class: "card" }, h("h3", {}, "Oil exchange"),
+        h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
+          "5-year gear-oil exchange — tracked separately from the major / minor services."));
+      const list = h("div", { class: "rec-list" });
+      for (const r of oil) list.append(h("div", { class: "rec-row" },
+        h("div", { class: "rec-name" }, r.name), dateCell(r, drawTab)));
+      oc.append(list);
+      wrap.append(oc);
+    }
+    return wrap;
+  }
+
   function recordPane(kind, records, emptyMsg) {
     records = records || [];
-    const card = h("div", { class: "card" });
-    if (kind === "service") {
-      const done = records.filter(r => r.date).length;
-      card.append(h("h3", {}, "Service completion dates"),
-        h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
-          `${done} of ${records.length} services completed. Dates from the KGH 2025 database`
-          + (isAdmin ? " — add a date to record a completed service." : ".")));
-    } else {
-      const nc = records.filter(r => !r.date).length;
-      card.append(h("h3", {}, "Retrofit records"),
-        h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
-          `${records.length} on record · ${nc} not completed. From the 25 KGH Retro whiteboard.`));
-    }
+    const nc = records.filter(r => !r.date).length;
+    const card = h("div", { class: "card" }, h("h3", {}, "Retrofit records"),
+      h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
+        `${records.length} on record · ${nc} not completed. From the 25 KGH Retro whiteboard.`));
     if (!records.length) { card.append(h("div", { class: "empty-state" }, emptyMsg)); return card; }
     const list = h("div", { class: "rec-list" });
     for (const r of records) {
       let right;
-      if (kind === "service") {
-        right = dateCell(r, drawTab);
-      } else if (r.id) {
-        // retrofit: status badge (when not already implied by a date) + the date/add-date control
+      if (r.id) {
         const badge = !r.date && r.status === "in_progress" ? h("span", { class: "rec-date wip" }, "In progress")
           : !r.date && r.status === "outstanding" ? h("span", { class: "rec-date out" }, "Outstanding")
           : null;
@@ -1246,8 +1349,7 @@ async function viewPlanning() {
       h("div", { class: "jt" }, j.title),
       h("div", { class: "jm" },
         j.priority != null ? h("span", { class: "pri-tag p" + j.priority }, "Priority " + j.priority) : null,
-        j.asset_tag ? h("span", {}, j.asset_tag) : null,
-        j.wo_code ? h("span", {}, "WO " + j.wo_code) : null),
+        j.asset_tag ? h("span", {}, j.asset_tag) : null),
       fromTeam && !readOnly ? h("button", { class: "chip-x", title: "Remove", onclick: () => mutate({ op: "clear_job", team_no: +fromTeam }) }, "×") : null);
     if (!readOnly) card.addEventListener("pointerdown", (e) => startDrag(e, { kind: "job", id: j.id, fromTeam }, card));
     return card;

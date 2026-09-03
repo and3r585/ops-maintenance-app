@@ -249,6 +249,22 @@ textarea { resize: vertical; min-height: 90px; }
   font-size: .84rem; color: var(--text-soft);
 }
 
+/* ---- service schedule (Planned / Completed) ---- */
+.svc-scroll { overflow-x: auto; }
+.svc-table { border-collapse: collapse; width: 100%; min-width: 420px; font-size: .87rem; }
+.svc-table th, .svc-table td {
+  text-align: left; padding: .55rem .8rem .55rem 0; border-bottom: 1px solid var(--border);
+  white-space: nowrap; vertical-align: middle;
+}
+.svc-table thead th {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-faint); font-weight: 600;
+}
+.svc-table tbody tr:last-child td { border-bottom: none; }
+.svc-table td:first-child { font-weight: 550; white-space: normal; }
+.svc-table td.svc-planned { color: var(--text-soft); font-variant-numeric: tabular-nums; }
+.svc-table td.svc-done { text-align: right; padding-right: 0; }
+
 /* ---- work order history ---- */
 .wo { padding: .7rem 0; border-top: 1px solid var(--border); }
 .wo:first-of-type { border-top: none; }

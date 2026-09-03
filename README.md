@@ -136,10 +136,14 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
     a **Next service due** card (108-month completion + 6 months, with a days-away / overdue
     indicator); and a **Condition monitoring (SMP)** box with gearbox / generator /
     main-bearing state and observations.
-  - *Service dates* — service completion dates 72 → 132 month (72/84/90/96/102/108/114/120/126/132)
-    plus the **5-Year Oil Exchange**. 72–114 and the oil exchange seed from `KGH_2025.csv`;
-    120/126/132 have no source column yet. Any missing date shows a **＋ Add date** button
-    that writes straight to SQLite (`PATCH /api/records/:id`).
+  - *Service dates* — a **Service schedule** table (72 → 132 month) with two columns:
+    **Planned** = the previous service's completion date plus the interval (derived — so
+    entering a completion date advances the next service's planned date, e.g. 108-month
+    completed → 114-month planned), and **Completed** = the editable date (`PATCH
+    /api/records/:id`). 72–114 seed from `KGH_2025.csv`; 120/126/132 start blank. The
+    **5-Year Oil Exchange** sits in its own box below, tracked separately.
+    Any date an **admin** changes on an asset opens an **approval modal** (was → new)
+    before it is written and logged — the same review step as the Data Explorer.
   - *Blades* — blade drone inspection date (from `KGH_2025.csv`) with the same **＋ Add date**
     editor, and a read-only blade-configuration summary (type + serials).
   - *HV history* — HV maintenance completion dates for the 2023 campaign, 2024/25 rephasing,
@@ -159,11 +163,12 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   - *History* — the work-order log (date, description, work type, service order, technicians)
     from the *SCOTT & STUART 2026* tab of the **Job Request** workbook — ~1,600 entries across
     the 96 turbines; site-wide rows (no turbine) are skipped. Filterable by work type.
-  - *Pendings* — ~570 open SGRE/SAP notifications imported from `Pendings.csv` (each with its
-    WO number, priority and affected system; `CREA`→Submitted, `APR`→Reviewed). Flow is
-    **Submitted → Reviewed → Completed**: an admin reviews (and may reserve parts — part
-    numbers, quantities, service order); a technician completes with a mandatory comment +
-    evidence photo. The **#/pendings** list (from the dashboard) filters by status and its
+  - *Pendings* — ~570 open SGRE/SAP notifications imported from `Pendings.csv` (priority and
+    affected system; `CREA`→Submitted, `APR`→Reviewed). Flow is
+    **Submitted → Reviewed → Completed**: to move an entry to **Reviewed** an admin must
+    assign a **priority of 1–5** (1 highest); the admin may then reserve parts (part numbers,
+    quantities, service order); a technician completes with a mandatory comment + evidence
+    photo. The **#/pendings** list (from the dashboard) filters by status and its
     **Export (CSV)** button exports exactly the current filter.
     Photos are resized to 4000&nbsp;px / q90 on upload (Pillow) and get a 480&nbsp;px list
     thumbnail; the list shows the thumbnail, clicking opens the full image. Files live in
