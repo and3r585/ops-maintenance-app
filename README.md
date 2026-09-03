@@ -95,10 +95,19 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   14–37 of the *Manplan 2025* tab; a roster row attaches to a login account when the
   Manplan-derived username matches a `Credentials.csv` username. The planning-board team
   members are the **active technician accounts** from `Credentials.csv`.
-- **Site dashboard** — open pending-entry count (by status), the next 10 service due
-  dates across the site (108-month + 6 months, soonest first), and every retrofit campaign
-  still outstanding or in progress with the affected turbine counts. Visible to everyone;
-  read-only.
+- **Site dashboard** — open pending-entry count (by status), each turbine's next incomplete
+  service (soonest first), and every retrofit campaign still outstanding / in progress.
+  Visible to everyone. Its three drill-downs — **`#/pendings`**, **`#/services`**,
+  **`#/retrofits`** — let an **admin edit completion dates in place**: on the *Service
+  completions* list, adding a date to a turbine's next service records it and the row
+  advances to the following service; on the *Retrofit completions* list, adding a date
+  closes that campaign out for that turbine. Every edit goes through the approval modal,
+  writes to `asset_records` via `PATCH /api/records/:id`, and shows up everywhere that
+  reads it (the asset's own tabs, the Data Explorer, the change log).
+  - *Next service due* (dashboard + the asset Details card + `#/services`) = the first
+    service with no completion date that falls after the last completed one; its **planned**
+    date is the last completion + the interval between the two (72→84 is +12 months, the
+    rest +6), or the install date + months when nothing is done yet.
 - **Data Explorer (admin only)** — two tools in one page:
   - *Bulk table* — pick any asset tab (Service dates, HV history, Stat history, Retrofits,
     Blades, Components) and get one table with a row per turbine and a column per record.
@@ -133,9 +142,9 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   - *Details* — **Identification** (turbine / type / location); an **Asset Details** card
     (make / model / family / serial / key dates, from `Equipment_info.csv`);
     a **Defect / operational issue** card (KGH 2025 column G — highlighted when present);
-    a **Next service due** card (108-month completion + 6 months, with a days-away / overdue
-    indicator); and a **Condition monitoring (SMP)** box with gearbox / generator /
-    main-bearing state and observations.
+    a **Next service due** card (the next incomplete service and its planned date — see the
+    dashboard note above — with a days-away / overdue indicator); and a **Condition
+    monitoring (SMP)** box with gearbox / generator / main-bearing state and observations.
   - *Service dates* — a **Service schedule** table (72 → 132 month) with two columns:
     **Planned** = the previous service's completion date plus the interval (derived — so
     entering a completion date advances the next service's planned date, e.g. 108-month

@@ -856,20 +856,19 @@ class Handler(BaseHTTPRequestHandler):
                 "SELECT status, COUNT(*) c FROM pending_entries GROUP BY status")}
             open_pendings = sum(c for s, c in by_status.items() if s != "COMPLETED")
 
-            services = service_due_list(conn)
+            services = service_worklist(conn)
             retro_rows = conn.execute(
-                "SELECT a.tag, r.name, r.status FROM asset_records r JOIN assets a ON a.id = r.asset_id "
+                "SELECT r.id, a.id AS asset_id, a.tag, r.name, r.status "
+                "FROM asset_records r JOIN assets a ON a.id = r.asset_id "
                 "WHERE r.category = 'retrofit' AND r.status IN ('outstanding','in_progress') "
                 "ORDER BY r.name, a.tag"
             ).fetchall()
             retro_by_name = {}
             for r in retro_rows:
-                retro_by_name.setdefault(r["name"], {"name": r["name"], "outstanding": [], "in_progress": []})
-                retro_by_name[r["name"]][r["status"]].append(r["tag"])
-            incomplete_retrofits = sorted(
-                retro_by_name.values(),
-                key=lambda g: -(len(g["outstanding"]) + len(g["in_progress"])),
-            )
+                g = retro_by_name.setdefault(r["name"], {"name": r["name"], "items": []})
+                g["items"].append({"asset_id": r["asset_id"], "tag": r["tag"],
+                                   "record_id": r["id"], "status": r["status"]})
+            incomplete_retrofits = sorted(retro_by_name.values(), key=lambda g: -len(g["items"]))
 
             return 200, {
                 "open_pendings": open_pendings,
@@ -993,8 +992,6 @@ class Handler(BaseHTTPRequestHandler):
                 "ORDER BY occurred_on DESC, id DESC", (parts[1],),
             ).fetchall()
             services = [dict(r) for r in recs if r["category"] == "service"]
-            s108 = next((s["date"] for s in services
-                         if s["name"].startswith("108 Month") and s["date"]), None)
             ordered = [r["id"] for r in conn.execute("SELECT id FROM assets ORDER BY tag")]
             tag_by_id = {r["id"]: r["tag"] for r in conn.execute("SELECT id, tag FROM assets")}
             idx = ordered.index(asset["id"])
@@ -1011,10 +1008,7 @@ class Handler(BaseHTTPRequestHandler):
                 "components": [dict(r) for r in recs if r["category"] == "component"],
                 "blades": [dict(r) for r in recs if r["category"] == "blade"],
                 "history": [dict(r) for r in history],
-                "next_service": {
-                    "base_108mo": s108,
-                    "due": add_months(s108, 6) if s108 else None,
-                },
+                "next_service": next_service(services, asset["install_date"]),
             }
 
         # set / clear a service, blade, hv or retrofit record date (admin only)
@@ -1513,19 +1507,55 @@ def load_plan(conn, date):
     }
 
 
-def service_due_list(conn):
-    """Every turbine with a 108-month completion date -> next service due (+6 months)."""
+def _service_month(name):
+    m = re.match(r"^\s*(\d+)\s*month", name or "", re.I)
+    return int(m.group(1)) if m else None
+
+
+def next_service(svc_records, install_date):
+    """The first incomplete service after the last completed one.
+    svc_records: dicts with 'name' and a 'date' (or 'occurred_on'). Planned date =
+    last completion + the interval, or install date + months if nothing is done yet.
+    Returns {record_id, name, planned, overdue} or None when every service is complete."""
+    seq = []
+    for s in svc_records:
+        m = _service_month(s["name"])
+        if m is not None:                   # the 5-year oil exchange is not in the sequence
+            seq.append({"id": s.get("id"), "name": s["name"], "month": m,
+                        "date": s.get("date") or s.get("occurred_on")})
+    seq.sort(key=lambda s: s["month"])
+    completed = [s for s in seq if s["date"]]
+    last_m = completed[-1]["month"] if completed else 0
+    last_date = completed[-1]["date"] if completed else None
+    nxt = next((s for s in seq if s["month"] > last_m), None)
+    if not nxt:
+        return None
+    interval = nxt["month"] - last_m if last_m else nxt["month"]
+    base = last_date or install_date
+    planned = add_months(base, interval) if base else None
+    return {"record_id": nxt["id"], "name": nxt["name"], "planned": planned,
+            "overdue": bool(planned and planned < today())}
+
+
+def service_worklist(conn):
+    """One row per turbine: its next incomplete service, ready to complete from the
+    dashboard drill-down."""
     rows = conn.execute(
-        "SELECT a.tag, r.occurred_on FROM asset_records r JOIN assets a ON a.id = r.asset_id "
-        "WHERE r.category = 'service' AND r.name LIKE '108 Month%' AND r.occurred_on IS NOT NULL"
+        "SELECT r.id, r.name, r.occurred_on, a.id AS asset_id, a.tag, a.install_date "
+        "FROM asset_records r JOIN assets a ON a.id = r.asset_id WHERE r.category = 'service'"
     ).fetchall()
-    td = today()
-    out = []
+    by_asset = {}
     for r in rows:
-        due = add_months(r["occurred_on"], 6)
-        out.append({"tag": r["tag"], "base_108mo": r["occurred_on"], "due": due,
-                    "overdue": due < td})
-    return sorted(out, key=lambda x: x["due"])
+        g = by_asset.setdefault(r["asset_id"],
+                                {"tag": r["tag"], "install": r["install_date"], "svc": []})
+        g["svc"].append({"id": r["id"], "name": r["name"], "occurred_on": r["occurred_on"]})
+    out = []
+    for aid, info in by_asset.items():
+        n = next_service(info["svc"], info["install"])
+        if n:
+            out.append({"asset_id": aid, "tag": info["tag"], **n})
+    out.sort(key=lambda x: (x["planned"] is None, x["planned"] or "", x["tag"]))
+    return out
 
 
 def load_pendings(conn, asset_id):

@@ -118,6 +118,54 @@ function approveChange(title, rows) {
   });
 }
 
+/* Editable completion-date control, shared by the asset tabs and the dashboard
+   drill-down lists. Admin-only editing, behind the approval modal; a PATCH to
+   /records/:id updates SQLite and everything that reads it. Everyone else sees
+   the value read-only, blank staying blank.
+   rec: { id, date, name, status }.  opts: { label, onSaved(date, status) } */
+function dateEditor(rec, opts) {
+  opts = opts || {};
+  const isAdmin = State.user && State.user.role === "ADMIN";
+  const label = opts.label || rec.name || "date";
+  if (!isAdmin || !rec.id) {
+    return h("span", { class: "rec-date" + (rec.date ? "" : " muted") },
+      rec.date ? fmtDate(rec.date) : "");
+  }
+  const wrap = h("span", { class: "rec-date-edit" });
+  const render = () => {
+    clear(wrap);
+    if (rec.date) wrap.append(
+      h("span", { class: "rec-date" }, fmtDate(rec.date)),
+      h("button", { class: "date-edit-link", title: "Change date", onclick: open }, "edit"));
+    else wrap.append(h("button", { class: "btn sm", onclick: open }, "＋ Add date"));
+  };
+  const open = () => {
+    clear(wrap);
+    const inp = h("input", { type: "date", value: rec.date || "", style: "width:auto" });
+    const commit = async (val) => {
+      const nv = (val || "").trim(), ov = rec.date || "";
+      if (nv === ov) { render(); return; }
+      const ok = await approveChange("Approve date change", [{
+        label, was: ov ? fmtDate(ov) : "", now: nv ? fmtDate(nv) : "",
+      }]);
+      if (!ok) { render(); return; }
+      try {
+        const r = await api("/records/" + rec.id, { method: "PATCH", body: { occurred_on: nv } });
+        rec.date = r.occurred_on;
+        if (r.status) rec.status = r.status;
+        toast(nv ? "Date saved" : "Date cleared");
+        if (opts.onSaved) opts.onSaved(rec.date, rec.status); else render();
+      } catch (e) { toast(e.message, true); render(); }
+    };
+    inp.addEventListener("change", () => commit(inp.value));
+    wrap.append(inp, h("button", { class: "btn sm ghost", onclick: render }, "Cancel"));
+    if (rec.date) wrap.append(h("button", { class: "btn sm ghost", onclick: () => commit("") }, "Clear"));
+    inp.focus();
+  };
+  render();
+  return wrap;
+}
+
 function navigate(hash) { window.location.hash = hash; }
 
 /* ---------- shared pending-entry card + workflow ---------- */
@@ -439,32 +487,33 @@ async function viewDashboard() {
   const pendCard = kpi(d.open_pendings, "Open pending entries",
     Object.entries(d.pendings_by_status || {})
       .map(([s, c]) => `${c} ${s.toLowerCase()}`).join(" · ") || "None", "#/pendings");
-  const svcCard = kpi(d.service_count, "Turbines with a next-service date",
-    d.next_services[0] ? "Next: " + d.next_services[0].tag + " on " + fmtDate(d.next_services[0].due) : "—",
+  const next0 = (d.next_services || [])[0];
+  const svcCard = kpi(d.service_count, "Turbines with a service outstanding",
+    next0 ? "Soonest: " + next0.tag + " " + next0.name + (next0.planned ? " · " + fmtDate(next0.planned) : "") : "—",
     "#/services");
   const retroCard = kpi(d.incomplete_retrofit_count, "Retrofit items not completed",
     `${(d.incomplete_retrofits || []).length} campaigns affected`, "#/retrofits");
 
   const svcList = h("div", { class: "card" },
     h("h3", {}, "Next service due", h("a", { href: "#/services", class: "hint" }, "view all →")),
-    h("p", { class: "hint", style: "margin:-.2rem 0 .6rem" }, "108-month service completion + 6 months."));
-  if (!d.next_services.length) svcList.append(h("div", { class: "empty-state" }, "No service dates on record."));
+    h("p", { class: "hint", style: "margin:-.2rem 0 .6rem" },
+      "Each turbine's next incomplete service, soonest first."));
+  if (!(d.next_services || []).length) svcList.append(h("div", { class: "empty-state" }, "All services up to date."));
   else svcList.append(serviceRows(d.next_services.slice(0, 10)));
 
   const retroList = h("div", { class: "card" },
     h("h3", {}, "Retrofits not completed", h("a", { href: "#/retrofits", class: "hint" }, "view all →")));
-  if (!d.incomplete_retrofits.length) retroList.append(h("div", { class: "empty-state" }, "All retrofits complete."));
+  if (!(d.incomplete_retrofits || []).length) retroList.append(h("div", { class: "empty-state" }, "All retrofits complete."));
   else {
     const list = h("div", { class: "rec-list" });
     for (const g of d.incomplete_retrofits.slice(0, 8)) {
-      const out = g.outstanding || [], wip = g.in_progress || [];
+      const wip = g.items.filter(i => i.status === "in_progress").length;
+      const out = g.items.length - wip;
       list.append(h("div", { class: "rec-row", style: "align-items:flex-start" },
         h("div", { class: "rec-name" }, g.name,
           h("div", { class: "hint", style: "font-weight:400;margin-top:.2rem" },
-            (out.length ? out.length + " outstanding" : "")
-            + (out.length && wip.length ? " · " : "")
-            + (wip.length ? wip.length + " in progress" : ""))),
-        h("span", { class: "rec-date out" }, out.length + wip.length)));
+            (out ? out + " outstanding" : "") + (out && wip ? " · " : "") + (wip ? wip + " in progress" : ""))),
+        h("span", { class: "rec-date out" }, g.items.length)));
     }
     retroList.append(list);
   }
@@ -481,13 +530,13 @@ function serviceRows(list) {
   const wrap = h("div", { class: "rec-list" });
   const daysAway = (iso) => Math.round((new Date(iso) - new Date()) / 86400000);
   for (const s of list) {
-    const dd = daysAway(s.due);
+    const dd = s.planned ? daysAway(s.planned) : null;
     wrap.append(h("div", { class: "rec-row", style: "cursor:pointer",
-      onclick: () => navigate("#/assets?q=" + s.tag) },
+      onclick: () => navigate("#/asset/" + s.asset_id + "?tab=Service%20dates") },
       h("div", { class: "rec-name" }, s.tag,
-        h("span", { class: "hint", style: "margin-left:.5rem" },
-          dd < 0 ? `overdue ${-dd}d` : dd === 0 ? "today" : `in ${dd}d`)),
-      h("span", { class: "rec-date " + (dd < 0 ? "out" : dd <= 30 ? "wip" : "") }, fmtDate(s.due))));
+        h("span", { class: "hint", style: "margin-left:.5rem;font-weight:400" }, s.name)),
+      h("span", { class: "rec-date " + (dd == null ? "muted" : dd < 0 ? "out" : dd <= 30 ? "wip" : "") },
+        s.planned ? fmtDate(s.planned) : "—")));
   }
   return wrap;
 }
@@ -538,16 +587,42 @@ async function viewServicesList() {
   let d;
   try { d = await api("/dashboard"); }
   catch (e) { return renderError(e); }
+  const list = d.next_services || [];
+  const isAdmin = State.user.role === "ADMIN";
+  const reload = () => viewServicesList();
+
   const card = h("div", { class: "card" },
-    h("h3", {}, "All turbines — next service due"),
-    h("p", { class: "hint", style: "margin:-.2rem 0 .6rem" },
-      d.next_services.length + " turbines · 108-month completion + 6 months, soonest first."));
-  card.append(d.next_services.length
-    ? serviceRows(d.next_services)
-    : h("div", { class: "empty-state" }, "No service dates on record."));
+    h("h3", {}, "Service completions"),
+    h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
+      list.length
+        ? `${list.length} turbines with a service outstanding, soonest first.`
+          + (isAdmin ? " Set a completion date here — it writes to the turbine's record." : "")
+        : "Every turbine's services are up to date."));
+  if (list.length) {
+    const tb = h("tbody", {});
+    for (const s of list) {
+      const dd = s.planned ? Math.round((new Date(s.planned) - new Date()) / 86400000) : null;
+      tb.append(h("tr", {},
+        h("td", {}, h("a", { href: "#/asset/" + s.asset_id + "?tab=Service%20dates" }, s.tag)),
+        h("td", {}, s.name),
+        h("td", { class: "svc-planned" }, s.planned
+          ? h("span", dd < 0 ? { style: "color:var(--danger)" } : {},
+              fmtDate(s.planned) + (dd < 0 ? ` · ${-dd}d overdue` : dd <= 30 ? ` · in ${dd}d` : ""))
+          : "—"),
+        h("td", { class: "svc-done" }, dateEditor(
+          { id: s.record_id, date: "", name: s.tag + " " + s.name },
+          { label: s.tag + " · " + s.name, onSaved: reload }))));
+    }
+    card.append(h("div", { class: "svc-scroll" },
+      h("table", { class: "svc-table" },
+        h("thead", {}, h("tr", {},
+          h("th", {}, "Turbine"), h("th", {}, "Service"),
+          h("th", {}, "Planned"), h("th", {}, "Completed"))),
+        tb)));
+  }
   root.replaceChildren(shell("dashboard",
     h("div", { class: "crumb" }, h("a", { href: "#/dashboard" }, "← Dashboard")),
-    h("div", { class: "page-head" }, h("h1", {}, "Service due dates")),
+    h("div", { class: "page-head" }, h("h1", {}, "Service completions")),
     card));
 }
 
@@ -556,19 +631,29 @@ async function viewRetrofitsList() {
   let d;
   try { d = await api("/dashboard"); }
   catch (e) { return renderError(e); }
+  const groups = d.incomplete_retrofits || [];
+  const isAdmin = State.user.role === "ADMIN";
+  const reload = () => viewRetrofitsList();
   const wrap = h("div", {});
-  wrap.append(h("div", { class: "page-head" }, h("h1", {}, "Retrofits not completed"),
-    h("p", { class: "sub" }, `${d.incomplete_retrofit_count} items across ${d.incomplete_retrofits.length} campaigns`)));
-  for (const g of d.incomplete_retrofits) {
-    const out = g.outstanding || [], wip = g.in_progress || [];
+  wrap.append(h("div", { class: "page-head" }, h("h1", {}, "Retrofit completions"),
+    h("p", { class: "sub" },
+      `${d.incomplete_retrofit_count} items across ${groups.length} campaigns`
+      + (isAdmin ? " · set a completion date to close one out" : ""))));
+  if (!groups.length) wrap.append(h("div", { class: "empty-state" }, "All retrofits complete."));
+  for (const g of groups) {
     const card = h("div", { class: "card" },
-      h("h3", {}, g.name, h("span", { class: "rec-date out" }, out.length + wip.length)));
-    if (out.length) card.append(h("div", { class: "retro-tags" },
-      h("span", { class: "state-label" }, "Outstanding"),
-      ...out.map(t => h("a", { href: "#/assets?q=" + t, class: "turb-tag" }, t))));
-    if (wip.length) card.append(h("div", { class: "retro-tags" },
-      h("span", { class: "state-label" }, "In progress"),
-      ...wip.map(t => h("a", { href: "#/assets?q=" + t, class: "turb-tag wip" }, t))));
+      h("h3", {}, g.name, h("span", { class: "rec-date out" }, g.items.length)));
+    const list = h("div", { class: "rec-list" });
+    for (const it of g.items) {
+      list.append(h("div", { class: "rec-row" },
+        h("div", { class: "rec-name" },
+          h("a", { href: "#/asset/" + it.asset_id + "?tab=Retrofits" }, it.tag),
+          it.status === "in_progress"
+            ? h("span", { class: "rec-date wip", style: "margin-left:.5rem" }, "in progress") : null),
+        dateEditor({ id: it.record_id, date: "", name: it.tag + " · " + g.name, status: it.status },
+          { label: it.tag + " · " + g.name, onSaved: reload })));
+    }
+    card.append(list);
     wrap.append(card);
   }
   root.replaceChildren(shell("dashboard",
@@ -872,52 +957,8 @@ async function viewAsset(id) {
     "Pendings": pendingsPane,
   };
 
-  /* date widget. Admins get an inline editor (PATCH /records/:id -> SQLite);
-     everyone else sees the value read-only, and a blank stays blank. */
-  function dateCell(rec, reload) {
-    if (!isAdmin || !rec.id) {
-      return h("span", { class: "rec-date" + (rec.date ? "" : " muted") },
-        rec.date ? fmtDate(rec.date) : "");
-    }
-    const wrap = h("span", { class: "rec-date-edit" });
-    const render = () => {
-      clear(wrap);
-      if (rec.date) {
-        wrap.append(
-          h("span", { class: "rec-date" }, fmtDate(rec.date)),
-          h("button", { class: "date-edit-link", title: "Change date", onclick: openInput }, "edit"));
-      } else {
-        wrap.append(h("button", { class: "btn sm", onclick: openInput }, "＋ Add date"));
-      }
-    };
-    const openInput = () => {
-      clear(wrap);
-      const inp = h("input", { type: "date", value: rec.date || "", style: "width:auto" });
-      const save = async (val) => {
-        const nv = (val || "").trim(), ov = rec.date || "";
-        if (nv === ov) { render(); return; }
-        const ok = await approveChange("Approve date change", [{
-          label: rec.name,
-          was: ov ? fmtDate(ov) : "",
-          now: nv ? fmtDate(nv) : "",
-        }]);
-        if (!ok) { render(); return; }
-        try {
-          const r = await api("/records/" + rec.id, { method: "PATCH", body: { occurred_on: nv } });
-          rec.date = r.occurred_on;
-          if (r.status) rec.status = r.status;
-          toast(nv ? "Date saved" : "Date cleared");
-          if (reload) reload(); else render();
-        } catch (e) { toast(e.message, true); render(); }
-      };
-      inp.addEventListener("change", () => save(inp.value));
-      wrap.append(inp, h("button", { class: "btn sm ghost", onclick: () => render() }, "Cancel"));
-      if (rec.date) wrap.append(h("button", { class: "btn sm ghost", onclick: () => save("") }, "Clear"));
-      inp.focus();
-    };
-    render();
-    return wrap;
-  }
+  const dateCell = (rec, reload) =>
+    dateEditor(rec, { label: rec.name, onSaved: reload || drawTab });
 
   function bladesPane() {
     const wrap = h("div", {});
@@ -979,11 +1020,12 @@ async function viewAsset(id) {
   function detailsPane() {
     const dl = (pairs) => h("dl", { class: "dl" }, ...pairs.flatMap(([k, v]) =>
       [h("dt", {}, k), h("dd", {}, v || "—")]));
-    const ns = detail.next_service || {};
-    let dueNote = "No 108-month service completion on record.";
+    const ns = detail.next_service;
+    let dueNote = ns ? (ns.planned ? "" : "No planned date — set the previous service's completion date.")
+                     : "All services on record are complete.";
     let dueClass = "muted";
-    if (ns.due) {
-      const days = Math.round((new Date(ns.due) - new Date()) / 86400000);
+    if (ns && ns.planned) {
+      const days = Math.round((new Date(ns.planned) - new Date()) / 86400000);
       dueNote = days < 0 ? `Overdue by ${-days} days`
         : days === 0 ? "Due today"
         : `In ${days} day${days === 1 ? "" : "s"}`;
@@ -1004,12 +1046,11 @@ async function viewAsset(id) {
       h("div", { class: "card next-svc " + dueClass, style: "grid-column:1/-1" },
         h("h3", {}, "Next service due"),
         h("div", { class: "next-svc-body" },
-          h("div", { class: "next-svc-date" }, ns.due ? fmtDate(ns.due) : "—"),
+          h("div", { class: "next-svc-date" }, ns && ns.planned ? fmtDate(ns.planned) : "—"),
           h("div", { class: "next-svc-note" }, dueNote)),
         h("p", { class: "hint", style: "margin:.6rem 0 0" },
-          ns.base_108mo
-            ? `108-month service completed ${fmtDate(ns.base_108mo)} + 6 months`
-            : "Set once the 108-month major service is completed.")),
+          ns ? ns.name + " — planned from the previous completion + interval"
+             : "Recorded on the Service dates tab.")),
       smpCard());
   }
 
