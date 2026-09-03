@@ -101,17 +101,6 @@ def norm_tag(raw):
     return "%s%02d" % (m.group(1).upper(), int(m.group(2))) if m else None
 
 
-def make_username(full, taken):
-    parts = "".join(ch for ch in full.lower() if ch.isalpha() or ch.isspace()).split()
-    base = (parts[0][0] + parts[-1]) if len(parts) > 1 else (parts[0] if parts else "user")
-    uname, i = base, 1
-    while uname in taken:
-        i += 1
-        uname = "%s%d" % (base, i)
-    taken.add(uname)
-    return uname
-
-
 # ---------------------------------------------------------------------------
 # per-tab parsers  (each CSV has a single header row; data starts at row 1)
 # ---------------------------------------------------------------------------
@@ -344,25 +333,43 @@ def _smp(rows):
     return out
 
 
+# The Manplan "Key" — recognised roster codes (uppercased for matching).
+_ROSTER_CODES = {
+    "KILG", "CARS", "BC", "HOL IN WD", "HOL APPRVD", "TRG", "MED", "SICK",
+    "ABS", "COVID", "SD", "ROST ON", "ON CALL", "OFF", "PAT", "JURY",
+}
+_ROSTER_CANON = {"HOL IN WD": "HOL in WD", "HOL APPRVD": "HOL Apprvd"}
+
+
+def _roster_code(raw):
+    """Normalise a Manplan cell to a Key code (canonical casing), or None."""
+    c = (raw or "").strip().upper()
+    if not c:
+        return None
+    if c == "HOL":
+        c = "HOL IN WD"
+    if c in _ROSTER_CODES:
+        return _ROSTER_CANON.get(c, c)
+    return None
+
+
 def _manplan(rows):
-    """Manplan.csv - row 11 dates, rows 13-36 technicians (col 4 = name)."""
-    UNAVAIL = {"HOL IN WD", "MED", "SICK", "ABS", "TRG", "PAT", "JURY"}
+    """Manplan.csv -> {name: {iso_date: code}} for the technician rows (13-36).
+    Row 11 holds the dates; column 4 of each tech row holds the name."""
     date_row = rows[11] if len(rows) > 11 else []
     col_date = {i: iso for i, v in enumerate(date_row) if (iso := parse_date(v))}
-
-    names, taken = [], set()
-    roster = {}
+    grid = {}
     for row in rows[13:37]:
         name = _get(row, 4)
         if not name:
             continue
-        uname = make_username(name, taken)
-        names.append({"name": name, "username": uname})
+        days = {}
         for ci, iso in col_date.items():
-            code = _get(row, ci).strip().upper()
-            if code in UNAVAIL:
-                roster.setdefault(iso, {})[uname] = "HOL in WD" if code == "HOL IN WD" else code
-    return names, roster
+            code = _roster_code(_get(row, ci))
+            if code:
+                days[iso] = code
+        grid[name] = days
+    return grid
 
 
 def _jobreq(rows):
@@ -473,10 +480,8 @@ def load_data():
     """The one-time turbine / asset / history import from source/_archived/*.csv.
     Only called when the database is completely empty."""
     order, defects, blades = _kgh2025(_data_rows("kgh2025"))
-    names, roster = _manplan(_data_rows("manplan"))
     return {
         "turbines": order,
-        "technicians": names,
         "services": _service_dates(_data_rows("svcdates")),
         "defects": defects,
         "blades": blades,
@@ -485,10 +490,16 @@ def load_data():
         "retrofits": _retrofits(_data_rows("retro")),
         "components": _components(_data_rows("components")),
         "equipment": _equipment(_data_rows("equipment")),
-        "roster": roster,
+        "roster": _manplan(_data_rows("manplan")),   # {name: {iso: code}}
         "history": _jobreq(_data_rows("jobreq")),
         "pendings": _pendings(_data_rows("pendings")),
     }
+
+
+def load_roster():
+    """source/_archived/Manplan.csv -> {name: {iso_date: code}}. One-time import;
+    after the first boot the roster_day table is the live record."""
+    return _manplan(_data_rows("manplan"))
 
 
 def load():  # full set — used by the sanity dump below
@@ -498,10 +509,10 @@ def load():  # full set — used by the sanity dump below
 if __name__ == "__main__":  # quick sanity dump
     d = load()
     print("turbines:", len(d["turbines"]), d["turbines"][:5])
-    print("technicians:", len(d["technicians"]), d["technicians"][0])
     for k in ("services", "hv", "stat", "retrofits", "components", "equipment", "smp", "history"):
         print(f"{k}: {len(d[k])} turbines")
-    print("roster dates:", len(d["roster"]))
+    print("roster: %d techs, %d day entries" %
+          (len(d["roster"]), sum(len(v) for v in d["roster"].values())))
     print("defects with text:", sum(1 for v in d["defects"].values() if v))
     print("pendings:", len(d["pendings"]),
           "| turbines:", len({p['tag'] for p in d['pendings']}))

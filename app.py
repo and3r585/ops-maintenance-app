@@ -178,14 +178,25 @@ CREATE TABLE IF NOT EXISTS assets (
     created_at   TEXT NOT NULL
 );
 
--- Technician day roster: only days a technician is NOT available.
--- code in ('HOL in WD','MED','SICK','ABS','TRG','PAT','JURY'); from the Manplan 2025 tab.
-CREATE TABLE IF NOT EXISTS roster (
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    on_date TEXT NOT NULL,
-    code    TEXT NOT NULL,
-    PRIMARY KEY (user_id, on_date)
+-- Technician roster. roster_tech is the master technician list (also drives the
+-- Notification Request rail); roster_day holds one code per technician per day
+-- (blank/available = no row). Seeded once from the Manplan tab, then app-owned.
+CREATE TABLE IF NOT EXISTS roster_tech (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    user_id     INTEGER REFERENCES users(id),   -- optional link to a login account
+    active      INTEGER NOT NULL DEFAULT 1,      -- 0 = archived (calendar kept)
+    sort        INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL,
+    archived_at TEXT
 );
+CREATE TABLE IF NOT EXISTS roster_day (
+    tech_id INTEGER NOT NULL REFERENCES roster_tech(id),
+    on_date TEXT NOT NULL,                       -- ISO date
+    code    TEXT NOT NULL,                       -- a Manplan Key code
+    PRIMARY KEY (tech_id, on_date)
+);
+CREATE INDEX IF NOT EXISTS ix_roster_day_date ON roster_day(on_date);
 
 -- Work-order history per asset (from the Job Request "SCOTT & STUART 2026" tab).
 CREATE TABLE IF NOT EXISTS asset_history (
@@ -245,9 +256,9 @@ CREATE TABLE IF NOT EXISTS notif_request (
 CREATE TABLE IF NOT EXISTS notif_member (
     plan_date TEXT NOT NULL,
     team_no   INTEGER NOT NULL,
-    user_id   INTEGER NOT NULL REFERENCES users(id),
+    tech_id   INTEGER NOT NULL REFERENCES roster_tech(id),
     slot      INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (plan_date, team_no, user_id)
+    PRIMARY KEY (plan_date, team_no, tech_id)
 );
 
 -- status flows Submitted -> Reviewed -> Completed
@@ -390,6 +401,25 @@ def seed():
             print("  replaced     %d service records from the comprehensive export" % n)
         _meta_set(conn, "service_dates_comprehensive", "1")
 
+    # --- one-shot: build the technician roster (roster_tech + roster_day) from the
+    #     Manplan grid. After this the roster tables are the live record and the
+    #     master technician list for Notification Request. The old `roster` table and
+    #     the user_id-keyed notif_member are retired here. ---
+    if not _meta_get(conn, "roster_calendar_v1"):
+        if "tech_id" not in [r["name"] for r in conn.execute("PRAGMA table_info(notif_member)")]:
+            conn.executescript(
+                "DROP TABLE IF EXISTS notif_member;"
+                "CREATE TABLE notif_member ("
+                "  plan_date TEXT NOT NULL, team_no INTEGER NOT NULL,"
+                "  tech_id INTEGER NOT NULL REFERENCES roster_tech(id),"
+                "  slot INTEGER NOT NULL DEFAULT 0,"
+                "  PRIMARY KEY (plan_date, team_no, tech_id));")
+        nt, nd = _seed_roster(conn)
+        if nt:
+            print("  roster       %d technicians, %d day entries from the Manplan grid" % (nt, nd))
+        conn.execute("DROP TABLE IF EXISTS roster")
+        _meta_set(conn, "roster_calendar_v1", "1")
+
     # --- one-time turbine / asset / history import.
     #     Runs ONLY when the database has never been populated. Once assets exist the
     #     database is the sole source of truth and source/_archived/*.csv is never read.
@@ -405,6 +435,7 @@ def seed():
     for key, name, min_role, sort in [
         ("dashboard", "Site Dashboard", "TECHNICIAN", 5),
         ("assets", "Asset Information", "TECHNICIAN", 10),
+        ("roster", "Technician Roster", "TECHNICIAN", 15),
         ("planning", "Notification Request", "ADMIN", 20),
         ("explorer", "Data Explorer", "ADMIN", 30),
     ]:
@@ -447,6 +478,34 @@ def _replace_service_records(conn, svc_by_tag):
             )
             n += 1
     return n
+
+
+def _seed_roster(conn):
+    """Create roster_tech from the active technician logins and backfill roster_day
+    from the Manplan grid. Runs once — returns (technicians, day_entries)."""
+    if conn.execute("SELECT COUNT(*) c FROM roster_tech").fetchone()["c"]:
+        return 0, 0
+    users = conn.execute(
+        "SELECT id, display_name FROM users WHERE role = 'TECHNICIAN' AND active = 1 "
+        "ORDER BY display_name"
+    ).fetchall()
+    for i, u in enumerate(users):
+        conn.execute(
+            "INSERT INTO roster_tech (name, user_id, active, sort, created_at) "
+            "VALUES (?,?,1,?,?)", (u["display_name"], u["id"], i, now()))
+    tid = {r["name"].strip().lower(): r["id"]
+           for r in conn.execute("SELECT id, name FROM roster_tech")}
+    days = 0
+    for name, entries in seed_data.load_roster().items():
+        t = tid.get(name.strip().lower())
+        if not t:
+            continue
+        for iso, code in entries.items():
+            conn.execute(
+                "INSERT OR IGNORE INTO roster_day (tech_id, on_date, code) VALUES (?,?,?)",
+                (t, iso, code))
+            days += 1
+    return len(users), days
 
 
 def _first_time_import(conn):
@@ -507,16 +566,7 @@ def _first_time_import(conn):
         add_records(data["components"], "component")
         add_records(data["blades"], "blade")
 
-    # --- technician roster (unavailable days): Manplan 2025.csv ---
-    if conn.execute("SELECT COUNT(*) c FROM roster").fetchone()["c"] == 0:
-        uid = {r["username"]: r["id"] for r in conn.execute("SELECT id,username FROM users")}
-        for on_date, people in data["roster"].items():
-            for username, code in people.items():
-                if username in uid:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO roster (user_id,on_date,code) VALUES (?,?,?)",
-                        (uid[username], on_date, code),
-                    )
+    # (technician roster: seeded by _seed_roster from seed(), not here)
 
     # --- work-order history: Job Request.csv ---
     if conn.execute("SELECT COUNT(*) c FROM asset_history").fetchone()["c"] == 0:
@@ -1016,26 +1066,26 @@ class Handler(BaseHTTPRequestHandler):
                     (date, team_no, now()))
 
             if op == "add_member":
-                uid = data.get("user_id")
-                u = conn.execute(
-                    "SELECT * FROM users WHERE id=? AND role='TECHNICIAN' AND active=1", (uid,)
+                tech_id = data.get("tech_id")
+                t = conn.execute(
+                    "SELECT * FROM roster_tech WHERE id=? AND active=1", (tech_id,)
                 ).fetchone()
-                if not u:
+                if not t:
                     raise ApiError(404, "Technician not found")
-                off = conn.execute("SELECT code FROM roster WHERE user_id=? AND on_date=?",
-                                   (uid, date)).fetchone()
-                if off:
-                    raise ApiError(409, "%s is unavailable (%s)" % (u["display_name"], off["code"]))
+                off = conn.execute("SELECT code FROM roster_day WHERE tech_id=? AND on_date=?",
+                                   (tech_id, date)).fetchone()
+                if off and off["code"] not in ROSTER_AVAILABLE:
+                    raise ApiError(409, "%s is unavailable (%s)" % (t["name"], off["code"]))
                 n = conn.execute("SELECT COUNT(*) c FROM notif_member WHERE plan_date=? AND team_no=?",
                                  (date, team_no)).fetchone()["c"]
                 if n >= NOTIF_TEAM_SIZE:
                     raise ApiError(409, "A team can hold at most %d technicians" % NOTIF_TEAM_SIZE)
                 conn.execute(
-                    "INSERT OR IGNORE INTO notif_member (plan_date, team_no, user_id, slot) VALUES (?,?,?,?)",
-                    (date, team_no, uid, n))
+                    "INSERT OR IGNORE INTO notif_member (plan_date, team_no, tech_id, slot) VALUES (?,?,?,?)",
+                    (date, team_no, tech_id, n))
             elif op == "remove_member":
-                conn.execute("DELETE FROM notif_member WHERE plan_date=? AND team_no=? AND user_id=?",
-                             (date, team_no, data.get("user_id")))
+                conn.execute("DELETE FROM notif_member WHERE plan_date=? AND team_no=? AND tech_id=?",
+                             (date, team_no, data.get("tech_id")))
             elif op == "set_field":
                 field = data.get("field")
                 if field not in ("asset_id", "contract_type", "description", "ats_case"):
@@ -1074,6 +1124,82 @@ class Handler(BaseHTTPRequestHandler):
                 build_xlsx([("Notification Requests", rows)]),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "notification-requests-%s.xlsx" % date)
+
+        # --- Technician Roster ---
+        if parts == ["roster"] and method == "GET":
+            user = self._require(conn)
+            return 200, load_roster_month(conn, user, query)
+
+        if parts == ["roster"] and method == "PATCH":
+            self._require(conn, "ADMIN")
+            data = self._json_body()
+            tid = data.get("tech_id")
+            d = (data.get("date") or "").strip()
+            code = (data.get("code") or "").strip()
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", d):
+                raise ApiError(400, "A date is required (YYYY-MM-DD)")
+            if not conn.execute("SELECT 1 FROM roster_tech WHERE id = ? AND active = 1",
+                                (tid,)).fetchone():
+                raise ApiError(404, "Technician not found")
+            if code and code not in ROSTER_KEY_CODES:
+                raise ApiError(400, "Unknown roster code")
+            if code:
+                conn.execute(
+                    "INSERT INTO roster_day (tech_id, on_date, code) VALUES (?,?,?) "
+                    "ON CONFLICT(tech_id, on_date) DO UPDATE SET code = excluded.code",
+                    (tid, d, code))
+            else:
+                conn.execute("DELETE FROM roster_day WHERE tech_id = ? AND on_date = ?", (tid, d))
+            return 200, {"ok": True, "tech_id": tid, "date": d, "code": code}
+
+        if parts == ["roster", "techs"] and method == "GET":
+            self._require(conn, ("ADMIN", "VIEW"))
+            archived = query.get("archived", ["0"])[0] == "1"
+            sql = ("SELECT t.id, t.name, t.active, t.archived_at, u.username AS linked_username "
+                   "FROM roster_tech t LEFT JOIN users u ON u.id = t.user_id ")
+            if not archived:
+                sql += "WHERE t.active = 1 "
+            sql += "ORDER BY t.active DESC, t.sort, t.name"
+            free = conn.execute(
+                "SELECT id, display_name, username, role FROM users WHERE active = 1 "
+                "AND username <> 'admin' "
+                "AND id NOT IN (SELECT user_id FROM roster_tech WHERE user_id IS NOT NULL) "
+                "ORDER BY display_name").fetchall()
+            return 200, {"techs": [dict(r) for r in conn.execute(sql)],
+                         "free_accounts": [dict(r) for r in free]}
+
+        if parts == ["roster", "techs"] and method == "POST":
+            self._require(conn, "ADMIN")
+            data = self._json_body()
+            name = (data.get("name") or "").strip()
+            if not name:
+                raise ApiError(400, "A name is required")
+            user_id = data.get("user_id") or None
+            if user_id:
+                if not conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
+                    raise ApiError(404, "Account not found")
+                if conn.execute("SELECT 1 FROM roster_tech WHERE user_id = ?", (user_id,)).fetchone():
+                    raise ApiError(409, "That account is already a roster technician")
+            mx = conn.execute("SELECT COALESCE(MAX(sort), 0) m FROM roster_tech").fetchone()["m"]
+            conn.execute(
+                "INSERT INTO roster_tech (name, user_id, active, sort, created_at) "
+                "VALUES (?,?,1,?,?)", (name, user_id, mx + 1, now()))
+            return 200, {"ok": True}
+
+        if (len(parts) == 4 and parts[:2] == ["roster", "techs"]
+                and parts[3] in ("archive", "restore") and method == "POST"):
+            self._require(conn, "ADMIN")
+            tid = parts[2]
+            if not conn.execute("SELECT 1 FROM roster_tech WHERE id = ?", (tid,)).fetchone():
+                raise ApiError(404, "Technician not found")
+            if parts[3] == "archive":
+                conn.execute("UPDATE roster_tech SET active = 0, archived_at = ? WHERE id = ?",
+                             (now(), tid))
+                conn.execute("DELETE FROM notif_member WHERE tech_id = ?", (tid,))
+            else:
+                conn.execute("UPDATE roster_tech SET active = 1, archived_at = NULL WHERE id = ?",
+                             (tid,))
+            return 200, {"ok": True}
 
         # --- assets ---
         if parts == ["assets"] and method == "GET":
@@ -1571,6 +1697,92 @@ def public_user(row):
             "display_name": row["display_name"], "role": row["role"]}
 
 
+# Technician Roster -----------------------------------------------------------
+
+# The Manplan "Key" — order here is the day-cell dropdown order.
+ROSTER_KEY = [
+    ["KILG", "Kilgallioch"], ["CARS", "Carscreugh"], ["BC", "Blackcraig"],
+    ["HOL in WD", "Holiday (working day)"], ["HOL Apprvd", "Holiday approved"],
+    ["TRG", "Training"], ["MED", "Medical"], ["SICK", "Sick"], ["ABS", "Absent"],
+    ["COVID", "COVID"], ["SD", "Stand down"], ["ROST ON", "Rostered on"],
+    ["ON CALL", "On call"], ["OFF", "Off"], ["PAT", "Paternity leave"],
+    ["JURY", "Jury duty"],
+]
+ROSTER_KEY_CODES = {c for c, _ in ROSTER_KEY}
+# a technician is available to a Notification Request only on a blank day or KILG
+ROSTER_AVAILABLE = {"", "KILG"}
+ROSTER_HOLIDAY_CODES = ("HOL in WD", "HOL Apprvd")
+
+
+def load_roster_month(conn, user, query):
+    """Roster calendar payload for one month. A TECHNICIAN sees only their own
+    linked technician; ADMIN/VIEW may pass scope=team or scope=tech:<id>."""
+    import calendar
+    month = (query.get("month", [""])[0] or time.strftime("%Y-%m")).strip()
+    if not re.match(r"^\d{4}-\d{2}$", month):
+        month = time.strftime("%Y-%m")
+    y, m = int(month[:4]), int(month[5:7])
+    ndays = calendar.monthrange(y, m)[1]
+    days = ["%04d-%02d-%02d" % (y, m, d) for d in range(1, ndays + 1)]
+
+    my_tech = conn.execute(
+        "SELECT id, name FROM roster_tech WHERE user_id = ? AND active = 1", (user["id"],)
+    ).fetchone()
+
+    scope = (query.get("scope", [""])[0] or "").strip()
+    if user["role"] == "TECHNICIAN":
+        scope = ("tech:%d" % my_tech["id"]) if my_tech else "none"
+    elif not scope:
+        scope = "team"
+
+    if user["role"] == "TECHNICIAN":
+        techs = [dict(my_tech)] if my_tech else []
+    else:
+        techs = [dict(r) for r in conn.execute(
+            "SELECT id, name FROM roster_tech WHERE active = 1 ORDER BY sort, name")]
+
+    out = {"month": month, "days": days, "scope": scope,
+           "can_edit": user["role"] == "ADMIN", "key": ROSTER_KEY,
+           "techs": techs}
+
+    if scope == "none":
+        out["techs"] = []
+        out["entries"] = {}
+        return out
+
+    if scope == "team":
+        rows = conn.execute(
+            "SELECT tech_id, on_date, code FROM roster_day WHERE on_date BETWEEN ? AND ?",
+            (days[0], days[-1])).fetchall()
+        ent = {}
+        for r in rows:
+            ent.setdefault(str(r["tech_id"]), {})[r["on_date"]] = r["code"]
+        out["entries"] = ent
+        return out
+
+    mm = re.match(r"^tech:(\d+)$", scope)
+    if not mm:
+        raise ApiError(400, "Bad scope")
+    tid = int(mm.group(1))
+    trow = conn.execute("SELECT id, name FROM roster_tech WHERE id = ?", (tid,)).fetchone()
+    if not trow:
+        raise ApiError(404, "Technician not found")
+    rows = conn.execute(
+        "SELECT on_date, code FROM roster_day WHERE tech_id = ? AND on_date BETWEEN ? AND ?",
+        (tid, days[0], days[-1])).fetchall()
+    out["tech"] = dict(trow)
+    out["entries"] = {str(tid): {r["on_date"]: r["code"] for r in rows}}
+    yr = ("%04d-01-01" % y, "%04d-12-31" % y)
+    sick = conn.execute(
+        "SELECT COUNT(*) c FROM roster_day WHERE tech_id = ? AND code = 'SICK' "
+        "AND on_date BETWEEN ? AND ?", (tid, *yr)).fetchone()["c"]
+    hol = conn.execute(
+        "SELECT COUNT(*) c FROM roster_day WHERE tech_id = ? AND code IN (?, ?) "
+        "AND on_date BETWEEN ? AND ?", (tid, *ROSTER_HOLIDAY_CODES, *yr)).fetchone()["c"]
+    out["totals"] = {"year": y, "sick": sick, "holiday": hol}
+    return out
+
+
 # Notification Request ---------------------------------------------------------
 
 NOTIF_TEAM_SIZE = 4          # technicians per team
@@ -1615,9 +1827,9 @@ def _notif_teams(conn, date):
         "LEFT JOIN assets a ON a.id = r.asset_id "
         "WHERE r.plan_date = ? ORDER BY r.team_no", (date,)).fetchall()
     mem = conn.execute(
-        "SELECT m.team_no, u.id, u.display_name FROM notif_member m "
-        "JOIN users u ON u.id = m.user_id WHERE m.plan_date = ? ORDER BY m.slot, u.display_name",
-        (date,)).fetchall()
+        "SELECT m.team_no, t.id, t.name AS display_name FROM notif_member m "
+        "JOIN roster_tech t ON t.id = m.tech_id WHERE m.plan_date = ? "
+        "ORDER BY m.slot, t.name", (date,)).fetchall()
     by_team = {}
     for m in mem:
         by_team.setdefault(m["team_no"], []).append(
@@ -1648,11 +1860,12 @@ def _team_complete(t):
 
 
 def load_notif(conn, date):
-    """Everything the Notification Request screen needs for one roster date."""
+    """Everything the Notification Request screen needs for one roster date.
+    Technicians and their availability come from the roster (roster_tech / roster_day)."""
     tech_rows = conn.execute(
-        "SELECT u.id, u.display_name, r.code AS reason "
-        "FROM users u LEFT JOIN roster r ON r.user_id = u.id AND r.on_date = ? "
-        "WHERE u.role = 'TECHNICIAN' AND u.active = 1 ORDER BY u.display_name", (date,)).fetchall()
+        "SELECT t.id, t.name AS display_name, d.code AS reason "
+        "FROM roster_tech t LEFT JOIN roster_day d ON d.tech_id = t.id AND d.on_date = ? "
+        "WHERE t.active = 1 ORDER BY t.sort, t.name", (date,)).fetchall()
 
     teams = _notif_teams(conn, date)
 
@@ -1670,11 +1883,11 @@ def load_notif(conn, date):
 
     available, unavailable = [], []
     for r in tech_rows:
-        row = {"id": r["id"], "display_name": r["display_name"], "reason": r["reason"]}
-        if r["reason"]:
-            unavailable.append(row)
+        code = r["reason"] or ""
+        if code not in ROSTER_AVAILABLE:
+            unavailable.append({"id": r["id"], "display_name": r["display_name"], "reason": code})
         elif r["id"] not in placed_teams:
-            available.append(row)
+            available.append({"id": r["id"], "display_name": r["display_name"], "reason": None})
 
     return {
         "date": date,

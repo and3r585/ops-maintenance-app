@@ -79,22 +79,25 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
 
 | Role | Sees | Can change |
 |------|------|-----------|
-| **Technician** | Site Dashboard, Asset Information | **only** add a pending entry, or complete a reviewed one (mandatory comment + photo) |
-| **View** | everything an Admin sees — Site Dashboard, Asset Information, Notification Request, Data Explorer | **nothing** — every page is read-only; CSV / change-report exports still work |
+| **Technician** | Site Dashboard, Asset Information, their own Technician Roster | **only** add a pending entry, or complete a reviewed one (mandatory comment + photo) |
+| **View** | everything an Admin sees — Site Dashboard, Asset Information, Technician Roster (all), Notification Request, Data Explorer | **nothing** — every page is read-only; CSV / change-report exports still work |
 | **Admin** | everything | everything — service/HV/retrofit/blade dates, pending review + parts, notification requests, bulk edits |
 
 ## What's built
 
 - **Login page** — username + password gate on the whole app.
-- **Role landing** — technicians get "Site dashboard" + "View asset information"; admins
-  additionally get "Notification Request" and "Data Explorer".
+- **Role landing** — technicians get "Site dashboard", "View asset information" and their
+  own "Technician Roster"; admins additionally get "Notification Request" and "Data Explorer".
 - **Asset register** — 96 turbines seeded from the *TURBINE* column of the *KGH 2025* tab
   of the KGH Virtual Whiteboard workbook, grouped by array (A–J). Searchable/filterable,
   with an open-pendings badge per turbine. No operational-status field on assets.
-- **Technicians / roster** — the day-by-day availability grid comes from column E, rows
-  14–37 of the *Manplan 2025* tab; a roster row attaches to a login account when the
-  Manplan-derived username matches a `Credentials.csv` username. The Notification Request
-  team members are the **active technician accounts** from `Credentials.csv`.
+- **Technician roster** — `roster_tech` (the master technician list) + `roster_day` (one
+  Manplan Key code per technician per day; blank = no row). Seeded once from the *Manplan*
+  tab for the technicians that were in Notification Request, then **app-owned** — the Excel
+  can be retired. `roster_tech` is now the master list for Notification Request: add or
+  archive a technician on the roster's **Manage technicians** panel and it mirrors into
+  Notification Request. Archiving keeps the calendar; the technician just leaves the active
+  list. (The old sparse `roster` table was dropped in the `roster_calendar_v1` migration.)
 - **Site dashboard** — open pending-entry count (by status), each turbine's next incomplete
   service (soonest first), and every retrofit campaign still outstanding / in progress.
   Visible to everyone. Its three drill-downs — **`#/pendings`**, **`#/services`**,
@@ -122,10 +125,19 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
     Components) listing every record whose completion date falls in that window — whether
     the date was imported from the spreadsheets or entered in the app — plus a Pendings
     sheet for entries reviewed/completed in the window.
+- **Technician Roster** — a month calendar, visible to everyone. `TECHNICIAN` logins see
+  **only their own** calendar (read-only); `VIEW` sees everyone (read-only); `ADMIN` edits.
+  ‹ › page months. A single technician → a Mon–Sun calendar with a Manplan-Key dropdown per
+  day (blank / `KILG` / `CARS` / `BC` / `HOL in WD` / `HOL Apprvd` / `TRG` / `MED` / `SICK` /
+  `ABS` / `COVID` / `SD` / `ROST ON` / `ON CALL` / `OFF` / `PAT` / `JURY`) and a bottom
+  banner: **sick days** (`SICK`) and **holidays used** (`HOL in WD` + `HOL Apprvd`) for the
+  displayed month's calendar year. **Team** shows every technician — as a calendar (each day
+  lists who's on what) or a **grid** (technicians × days, colour-coded). Admins get **Manage
+  technicians** to add (name + optional login link), archive (calendar kept, leaves
+  Notification Request) and restore.
 - **Notification Request (admin)** — pick a **roster date**; the left rail shows **available
-  technicians** as draggable chips (unavailable ones greyed with their reason, from the
-  *Manplan 2025* day grid — unavailable = `HOL in WD` / `MED` / `SICK` / `ABS` / `TRG` /
-  `PAT` / `JURY`, blank or anything else = available). Drag technicians into **teams of up
+  technicians** as draggable chips, straight from the roster: available only on a **blank or
+  `KILG`** day, every other code greyed with the code as the reason. Drag technicians into **teams of up
   to 4**; a request needs a **contract type** (dropdown mirrored from the notification-request
   workbook), a **description**, at least one technician, and a **turbine**. Six contract
   types are the exception — `STORES - SERVICE`, `STORES - CORRECTIVE`, `SUPERVISOR DUTIES`,

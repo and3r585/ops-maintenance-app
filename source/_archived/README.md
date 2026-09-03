@@ -27,7 +27,7 @@ superseded by `source/KGH_SMP.csv`.
 | `Kilgallioch_App_data.csv` | Nacelle traceability | component serials, blade config, commissioning date |
 | `Equipment_info.csv` | Equipment info | manufacturer / model / family / serial / key dates |
 | `KGH_SMP_Action_Tracker.csv` | SMP tracker | gearbox / generator / main-bearing condition |
-| `Manplan.csv` | Manplan 2025 | technician availability roster |
+| `Manplan.csv` | Manplan 2025 | technician roster grid — backfilled once into `roster_tech` / `roster_day`, then app-owned |
 | `Job_Request.csv` | Scott & Stuart 2026 | ~1,600 work-order history records |
 | `Pendings.csv` | SGRE/SAP export | ~570 pending notifications |
 

@@ -366,7 +366,7 @@ async function logout(silent) {
 /* ================================================================
    Chrome
    ================================================================ */
-const MODULE_ROUTE = { assets: "#/assets", planning: "#/planning", dashboard: "#/dashboard", explorer: "#/explorer" };
+const MODULE_ROUTE = { assets: "#/assets", roster: "#/roster", planning: "#/planning", dashboard: "#/dashboard", explorer: "#/explorer" };
 function topbar(active) {
   const navItems = State.modules.map((m) =>
     h("a", {
@@ -440,7 +440,15 @@ function viewHome() {
         ? "Browse the asset register, review full details and history, and edit records."
         : role === "VIEW"
         ? "Browse the asset register and review full details and history."
-        : "Browse the asset register, review full details and history, and log pending observations with photos.")));
+        : "Browse the asset register, review full details and history, and log pending observations with photos.")),
+      h("button", { class: "tile", onclick: () => navigate("#/roster") },
+        h("span", { class: "ico" }, "🗓️"),
+        h("h3", {}, "Technician Roster"),
+        h("p", {}, isAdmin
+          ? "A month calendar per technician — edit each day from the Manplan Key, see the team view, and manage who's on the roster."
+          : role === "VIEW"
+          ? "Month calendar of every technician's roster, plus the team view."
+          : "Your monthly roster calendar.")));
   if (elevated) {
     tiles.append(
       h("button", { class: "tile", onclick: () => navigate("#/planning") },
@@ -1455,9 +1463,9 @@ async function viewPlanning() {   /* Notification Request */
         zone.classList.remove("over", "reject");
         if (accept === payload.kind && !full) {
           if (team === "rail") {
-            if (payload.fromTeam) mutate({ op: "remove_member", team_no: +payload.fromTeam, user_id: payload.id });
+            if (payload.fromTeam) mutate({ op: "remove_member", team_no: +payload.fromTeam, tech_id: payload.id });
           } else {
-            mutate({ op: "add_member", team_no: +team, user_id: payload.id });
+            mutate({ op: "add_member", team_no: +team, tech_id: payload.id });
           }
         }
       }
@@ -1473,7 +1481,7 @@ async function viewPlanning() {   /* Notification Request */
     const chip = h("div", { class: "tech-chip" + (off ? " off" : "") + (fromTeam ? " placed" : "") + (dup ? " dup" : "") },
       h("span", { class: "tc-name" }, t.display_name),
       (fromTeam && !readOnly)
-        ? h("button", { class: "chip-x", title: "Remove", onclick: () => mutate({ op: "remove_member", team_no: +fromTeam, user_id: t.id }) }, "×")
+        ? h("button", { class: "chip-x", title: "Remove", onclick: () => mutate({ op: "remove_member", team_no: +fromTeam, tech_id: t.id }) }, "×")
         : (off ? h("span", { class: "chip-reason" }, REASON_LABEL[t.reason] || t.reason) : null));
     if (!off && !readOnly) chip.addEventListener("pointerdown", (e) => startDrag(e, { kind: "tech", id: t.id, fromTeam }, chip));
     return chip;
@@ -1627,6 +1635,210 @@ async function viewPlanning() {   /* Notification Request */
   draw();
 }
 
+/* ---------- Technician Roster ---------- */
+const ROSTER_MONTHS = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+const ROSTER_DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const codeSlug = (c) => (c || "none").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-+$/,"");
+
+async function viewRoster() {
+  const role = State.user.role;
+  const isAdmin = role === "ADMIN";
+  const isTech = role === "TECHNICIAN";
+  loading();
+
+  let ym = new Date().toISOString().slice(0, 7);
+  let scope = "";
+  let layout = "calendar";
+  let data;
+
+  async function load() {
+    data = await api("/roster?month=" + ym + (scope ? "&scope=" + encodeURIComponent(scope) : ""));
+    scope = data.scope;
+  }
+  try { await load(); } catch (e) { return renderError(e); }
+
+  function shiftMonth(delta) {
+    const [y, m] = ym.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    ym = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+  }
+  function monthLabel() { const [y, m] = ym.split("-").map(Number); return ROSTER_MONTHS[m - 1] + " " + y; }
+  async function reload() { try { await load(); draw(); } catch (e) { toast(e.message, true); } }
+  async function setDay(techId, date, code) {
+    try {
+      await api("/roster", { method: "PATCH", body: { tech_id: techId, date, code } });
+      await load(); draw();
+    } catch (e) { toast(e.message, true); }
+  }
+  const codeLabel = (c) => { const k = (data.key || []).find(x => x[0] === c); return k ? k[1] : c; };
+  const shortName = (n) => { const p = n.trim().split(/\s+/); return p.length > 1 ? p[0][0] + " " + p[p.length - 1] : n; };
+
+  function monthCells() {
+    const [y, m] = ym.split("-").map(Number);
+    const startPad = (new Date(y, m - 1, 1).getDay() + 6) % 7;      // Monday = 0
+    const dim = new Date(y, m, 0).getDate();
+    const cells = Array(startPad).fill(null);
+    for (let d = 1; d <= dim; d++)
+      cells.push(y + "-" + String(m).padStart(2, "0") + "-" + String(d).padStart(2, "0"));
+    while (cells.length % 7) cells.push(null);
+    return cells;
+  }
+  function calShell(dayContent) {
+    const grid = h("div", { class: "cal-grid" });
+    ROSTER_DOW.forEach(d => grid.append(h("div", { class: "cal-dow" }, d)));
+    for (const iso of monthCells()) {
+      if (!iso) { grid.append(h("div", { class: "cal-cell empty" })); continue; }
+      const cell = h("div", { class: "cal-cell" }, h("div", { class: "cal-num" }, +iso.slice(8)));
+      dayContent(cell, iso);
+      grid.append(cell);
+    }
+    return grid;
+  }
+  const codeChip = (code) => h("span", { class: "rcode r-" + codeSlug(code), title: codeLabel(code) }, code);
+
+  function techCalendar() {
+    const tid = data.tech.id;
+    const ent = data.entries[String(tid)] || {};
+    return h("div", { class: "card" }, h("h3", {}, isTech ? "My roster" : data.tech.name),
+      calShell((cell, iso) => {
+        const code = ent[iso] || "";
+        if (data.can_edit) {
+          const s = h("select", { class: "cal-sel r-" + codeSlug(code) },
+            h("option", { value: "" }, "—"),
+            ...data.key.map(([c]) => { const o = h("option", { value: c }, c); if (c === code) o.selected = true; return o; }));
+          s.addEventListener("change", () => setDay(tid, iso, s.value));
+          cell.append(s);
+        } else if (code) cell.append(codeChip(code));
+      }));
+  }
+  function teamCalendar() {
+    return h("div", { class: "card" }, h("h3", {}, "Team — " + monthLabel()),
+      calShell((cell, iso) => {
+        const list = h("div", { class: "cal-team" });
+        for (const t of data.techs) {
+          const code = (data.entries[String(t.id)] || {})[iso];
+          if (code) list.append(h("div", { class: "cal-team-row" },
+            h("span", { class: "ct-name" }, shortName(t.name)), codeChip(code)));
+        }
+        if (list.children.length) cell.append(list);
+      }));
+  }
+  function teamGrid() {
+    const cells = monthCells().filter(Boolean);
+    const hr = h("tr", {}, h("th", { class: "rm-name" }, "Technician"));
+    cells.forEach(iso => hr.append(h("th", {}, +iso.slice(8))));
+    const tb = h("tbody", {});
+    for (const t of data.techs) {
+      const ent = data.entries[String(t.id)] || {};
+      const tr = h("tr", {}, h("td", { class: "rm-name" }, t.name));
+      cells.forEach(iso => {
+        const code = ent[iso] || "";
+        tr.append(h("td", { class: "r-" + codeSlug(code), title: code ? codeLabel(code) : "" }, code || ""));
+      });
+      tb.append(tr);
+    }
+    return h("div", { class: "card" }, h("h3", {}, "Team grid — " + monthLabel()),
+      h("div", { class: "roster-scroll" },
+        h("table", { class: "roster-matrix" }, h("thead", {}, hr), tb)));
+  }
+  function banner() {
+    const t = data.totals;
+    return h("div", { class: "roster-banner" }, h("b", {}, t.year + " totals"),
+      h("span", {}, "Sick days: " + t.sick), h("span", {}, "Holidays used: " + t.holiday));
+  }
+
+  async function manage() {
+    let td;
+    try { td = await api("/roster/techs?archived=1"); } catch (e) { return toast(e.message, true); }
+    const body = h("div", {});
+    const backdrop = h("div", { class: "modal-backdrop" },
+      h("div", { class: "modal" }, h("h3", {}, "Manage roster technicians"), body,
+        h("div", { class: "btn-row", style: "margin-top:1rem" },
+          h("button", { class: "btn", onclick: () => backdrop.remove() }, "Close"))));
+    backdrop.addEventListener("click", e => { if (e.target === backdrop) backdrop.remove(); });
+    document.body.append(backdrop);
+
+    async function refresh() { td = await api("/roster/techs?archived=1"); await load(); drawManage(); draw(); }
+    function drawManage() {
+      clear(body);
+      const nameIn = h("input", { type: "text", placeholder: "Full name" });
+      const acct = h("select", { style: "width:auto" },
+        h("option", { value: "" }, "No login link"),
+        ...td.free_accounts.map(a => h("option", { value: a.id }, a.display_name + " (" + a.username + ")")));
+      body.append(h("div", { class: "roster-add" }, nameIn, acct,
+        h("button", { class: "btn primary sm", onclick: async () => {
+          if (!nameIn.value.trim()) return toast("Enter a name", true);
+          try { await api("/roster/techs", { method: "POST", body: { name: nameIn.value.trim(), user_id: acct.value || null } });
+            toast(nameIn.value.trim() + " added"); await refresh();
+          } catch (e) { toast(e.message, true); }
+        } }, "Add")));
+
+      const active = td.techs.filter(t => t.active), arch = td.techs.filter(t => !t.active);
+      body.append(h("h4", {}, "On the roster (" + active.length + ")"));
+      for (const t of active) body.append(h("div", { class: "roster-manage-row" },
+        h("span", {}, t.name + (t.linked_username ? "  ·  " + t.linked_username : "")),
+        h("button", { class: "link-btn danger", onclick: async () => {
+          if (!confirm("Archive " + t.name + "? The calendar is kept but they leave the roster and Notification Request.")) return;
+          try { await api("/roster/techs/" + t.id + "/archive", { method: "POST" });
+            if (scope === "tech:" + t.id) scope = "team";
+            await refresh();
+          } catch (e) { toast(e.message, true); }
+        } }, "Archive")));
+      if (arch.length) {
+        body.append(h("h4", {}, "Archived (" + arch.length + ")"));
+        for (const t of arch) body.append(h("div", { class: "roster-manage-row muted" },
+          h("span", {}, t.name),
+          h("button", { class: "link-btn", onclick: async () => {
+            try { await api("/roster/techs/" + t.id + "/restore", { method: "POST" }); await refresh(); }
+            catch (e) { toast(e.message, true); }
+          } }, "Restore")));
+      }
+    }
+    drawManage();
+  }
+
+  const wrap = h("div", {});
+  function draw() {
+    clear(wrap);
+    const head = h("div", { class: "cal-head" },
+      h("button", { class: "cal-nav", onclick: () => { shiftMonth(-1); reload(); } }, "‹"),
+      h("div", { class: "cal-title" }, monthLabel()),
+      h("button", { class: "cal-nav", onclick: () => { shiftMonth(1); reload(); } }, "›"));
+
+    if (data.scope === "none") {
+      wrap.append(head, h("div", { class: "empty-state" },
+        "You're not on the technician roster yet — ask an admin to add you."));
+      return;
+    }
+
+    if (!isTech) {
+      const sel = h("select", { style: "width:auto" },
+        h("option", { value: "team" }, "Team view"),
+        ...data.techs.map(t => h("option", { value: "tech:" + t.id }, t.name)));
+      sel.value = scope;
+      sel.addEventListener("change", () => { scope = sel.value; reload(); });
+      head.append(sel);
+      if (scope === "team") head.append(h("div", { class: "cal-layout" },
+        h("button", { class: layout === "calendar" ? "active" : "", onclick: () => { layout = "calendar"; draw(); } }, "Calendar"),
+        h("button", { class: layout === "grid" ? "active" : "", onclick: () => { layout = "grid"; draw(); } }, "Grid")));
+      if (isAdmin) head.append(h("button", { class: "btn sm ghost", style: "margin-left:auto", onclick: manage }, "Manage technicians"));
+    }
+    wrap.append(head);
+
+    if (scope === "team") wrap.append(layout === "grid" ? teamGrid() : teamCalendar());
+    else { wrap.append(techCalendar()); if (data.totals) wrap.append(banner()); }
+  }
+
+  root.replaceChildren(shell("roster",
+    h("div", { class: "page-head" }, h("h1", {}, "Technician Roster"),
+      h("p", { class: "sub" }, isAdmin
+        ? "Set each technician's day from the Manplan Key. Blank or KILG = available in Notification Request; every other code = unavailable."
+        : isTech ? "Your monthly roster." : "Every technician's roster, month by month.")),
+    wrap));
+  draw();
+}
+
 /* ================================================================
    Router
    ================================================================ */
@@ -1663,6 +1875,7 @@ async function render() {
   if (parts[0] === "asset" && parts[1]) return viewAsset(parts[1]);
   switch (parts[0]) {
     case "assets": return viewAssets();
+    case "roster": return viewRoster();
     case "planning": return viewPlanning();
     case "dashboard": return viewDashboard();
     case "pendings": return viewPendingsList();

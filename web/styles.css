@@ -478,6 +478,82 @@ textarea { resize: vertical; min-height: 90px; }
 .notif-bar .spacer { flex: 1; }
 @media (max-width: 620px) { .notif-fields { grid-template-columns: 1fr; } }
 
+/* ---- Technician Roster ---- */
+.cal-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.cal-nav {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  width: 32px; height: 32px; font-size: 1.1rem; cursor: pointer; color: var(--text);
+}
+.cal-nav:hover { background: var(--surface-2); }
+.cal-title { font-family: var(--font-serif); font-weight: 700; font-size: 1.15rem; min-width: 9.5rem; }
+.cal-layout { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.cal-layout button {
+  background: var(--surface); border: none; padding: .35rem .7rem; font: inherit; font-size: .82rem;
+  cursor: pointer; color: var(--text-soft);
+}
+.cal-layout button.active { background: var(--accent); color: #fff; }
+
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-dow {
+  font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--text-soft); text-align: center; padding: .2rem 0;
+}
+.cal-cell {
+  min-height: 76px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: .3rem; background: var(--surface); display: flex; flex-direction: column; gap: .25rem;
+}
+.cal-cell.empty { background: transparent; border-color: transparent; min-height: 0; }
+.cal-num { font-size: .74rem; font-weight: 600; color: var(--text-soft); }
+.cal-sel { width: 100%; font-size: .78rem; padding: .15rem .2rem; border-radius: 4px; }
+.cal-team { display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+.cal-team-row { display: flex; align-items: center; gap: .3rem; font-size: .7rem; }
+.cal-team-row .ct-name { color: var(--text-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.rcode {
+  font-size: .66rem; font-weight: 700; letter-spacing: .02em; padding: .05rem .3rem;
+  border-radius: 999px; white-space: nowrap;
+}
+
+.roster-scroll { overflow-x: auto; }
+.roster-matrix { border-collapse: collapse; font-size: .72rem; }
+.roster-matrix th, .roster-matrix td {
+  border: 1px solid var(--border); padding: .25rem .3rem; text-align: center; min-width: 26px;
+  font-variant-numeric: tabular-nums;
+}
+.roster-matrix thead th { background: var(--surface-2); position: sticky; top: 0; }
+.roster-matrix .rm-name {
+  text-align: left; white-space: nowrap; position: sticky; left: 0; z-index: 1;
+  background: var(--surface); font-weight: 600; min-width: 130px;
+}
+.roster-matrix thead .rm-name { z-index: 2; background: var(--surface-2); }
+
+.roster-banner {
+  margin-top: 1rem; display: flex; gap: 1.4rem; flex-wrap: wrap; align-items: center;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: .8rem 1.1rem; font-size: .9rem;
+}
+.roster-banner b { font-family: var(--font-serif); }
+
+.roster-add { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.roster-add input { flex: 1; min-width: 140px; }
+.roster-manage-row {
+  display: flex; justify-content: space-between; align-items: center; gap: .8rem;
+  padding: .4rem 0; border-top: 1px solid var(--border); font-size: .88rem;
+}
+.roster-manage-row.muted { color: var(--text-soft); }
+.modal h4 { margin: 1rem 0 .2rem; font-size: .76rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-soft); }
+
+/* roster code colours (share with .cal-sel via r-<slug>) */
+.r-kilg          { background: rgba(90,160,110,.18); color: #4c9666; }
+.r-cars,.r-bc    { background: rgba(90,130,190,.18); color: #5a82be; }
+.r-rost-on,.r-on-call { background: rgba(120,140,160,.16); color: var(--text-soft); }
+.r-sick,.r-abs,.r-covid { background: rgba(191,91,91,.16); color: var(--danger); }
+.r-hol-in-wd,.r-hol-apprvd,.r-pat,.r-jury,.r-off { background: rgba(210,160,90,.18); color: #c79a4a; }
+.r-trg,.r-med,.r-sd { background: rgba(150,120,190,.16); color: #9678be; }
+td.r-none, .cal-sel.r-none { color: var(--text-faint); }
+select.cal-sel.r-kilg { color: #4c9666; }
+select.cal-sel.r-sick, select.cal-sel.r-abs { color: var(--danger); }
+
 /* ---- condition monitoring (SMP) box ---- */
 .state-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: .8rem; }
 @media (max-width: 560px) { .state-row { grid-template-columns: 1fr; } }
