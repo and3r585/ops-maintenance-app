@@ -1782,33 +1782,35 @@ async function viewRoster() {
     const hr = h("tr", {}, h("th", { class: "rm-name" }, "Technician"));
     cells.forEach(iso => hr.append(h("th", {
       class: "cal-day-th" + (gridDay === iso ? " hi" : ""),
-      title: "Highlight who's available " + iso,
+      title: "Highlight who's unavailable " + iso,
       onclick: () => { gridDay = (gridDay === iso ? null : iso); draw(); },
     }, +iso.slice(8))));
+    const unavail = (id) => gridDay && !ROSTER_FREE.has((data.entries[String(id)] || {})[gridDay] || "");
     const tb = h("tbody", {});
     for (const t of data.techs) {
       const ent = data.entries[String(t.id)] || {};
-      const freeToday = gridDay && ROSTER_FREE.has(ent[gridDay] || "");
-      const tr = h("tr", {}, h("td", { class: "rm-name" + (freeToday ? " avail" : "") }, t.name));
+      const tr = h("tr", {}, h("td", { class: "rm-name" + (unavail(t.id) ? " unavail" : "") }, t.name));
       cells.forEach(iso => {
         const code = ent[iso] || "";
-        const hi = gridDay === iso && ROSTER_FREE.has(code) ? " avail" : "";
+        const hi = gridDay === iso && !ROSTER_FREE.has(code) ? " unavail" : "";
         tr.append(h("td", { class: "r-" + codeSlug(code) + hi, title: code ? codeLabel(code) : "" }, code || ""));
       });
       tb.append(tr);
     }
-    const availCount = gridDay ? data.techs.filter(t => ROSTER_FREE.has((data.entries[String(t.id)] || {})[gridDay] || "")).length : 0;
+    const unavailCount = gridDay ? data.techs.filter(t => unavail(t.id)).length : 0;
     return h("div", { class: "card" },
       h("h3", {}, "Team grid — " + monthLabel()),
       gridDay ? h("p", { class: "hint", style: "margin:-.3rem 0 .6rem" },
-        availCount + " available on " + fmtDate(gridDay) + " (green). Click the day again to clear.") : null,
+        unavailCount + " unavailable on " + fmtDate(gridDay) + " (red) · "
+        + (data.techs.length - unavailCount) + " available. Click the day again to clear.") : null,
       h("div", { class: "roster-scroll" },
         h("table", { class: "roster-matrix" }, h("thead", {}, hr), tb)));
   }
   function banner() {
     const t = data.totals;
-    return h("div", { class: "roster-banner" }, h("b", {}, t.year + " totals"),
-      h("span", {}, "Sick days: " + t.sick), h("span", {}, "Holidays used: " + t.holiday));
+    return h("div", { class: "roster-banner" },
+      h("span", {}, h("b", {}, "Holidays used"), " (" + t.year + "): " + t.holiday),
+      h("span", {}, h("b", {}, "Sick days"), " (rolling 12 months): " + t.sick));
   }
 
   async function manage() {

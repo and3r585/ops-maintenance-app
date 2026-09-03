@@ -563,12 +563,12 @@ select.cal-sel.r-sick, select.cal-sel.r-abs { color: var(--danger); }
 .cal-note.has { color: var(--accent); }
 .cal-note:hover { color: var(--accent); }
 
-/* grid view: "who's available on this day" highlight */
+/* grid view: click a day header to flag who's UNAVAILABLE that day in red */
 .roster-matrix .cal-day-th { cursor: pointer; user-select: none; }
 .roster-matrix .cal-day-th:hover { background: var(--surface); }
 .roster-matrix .cal-day-th.hi { background: var(--accent); color: #fff; }
-.roster-matrix td.avail { background: rgba(90,160,110,.28); color: #3f7d55; font-weight: 700; }
-.roster-matrix .rm-name.avail { background: rgba(90,160,110,.28); color: #3f7d55; }
+.roster-matrix td.unavail { background: rgba(191,91,91,.26); color: var(--danger); font-weight: 700; }
+.roster-matrix .rm-name.unavail { background: rgba(191,91,91,.26); color: var(--danger); }
 
 .btn.ghost.danger { color: var(--danger); }
 .btn.ghost.danger:hover { background: rgba(191,91,91,.1); }

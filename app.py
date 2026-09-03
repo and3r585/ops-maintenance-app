@@ -17,6 +17,7 @@ Roles & accounts:
 
 import argparse
 import csv
+import datetime
 import hashlib
 import io
 import json
@@ -1878,14 +1879,20 @@ def load_roster_month(conn, user, query):
         (tid, days[0], days[-1])).fetchall()
     out["tech"] = dict(trow)
     out["entries"] = {str(tid): {r["on_date"]: r["code"] for r in rows}}
+    # holidays: calendar year of the displayed month; sick: rolling 12 months from today
     yr = ("%04d-01-01" % y, "%04d-12-31" % y)
+    te = datetime.date.fromisoformat(today())
+    try:
+        ts = te.replace(year=te.year - 1)
+    except ValueError:                       # 29 Feb -> 28 Feb
+        ts = te.replace(year=te.year - 1, day=28)
     sick = conn.execute(
         "SELECT COUNT(*) c FROM roster_day WHERE tech_id = ? AND code = 'SICK' "
-        "AND on_date BETWEEN ? AND ?", (tid, *yr)).fetchone()["c"]
+        "AND on_date BETWEEN ? AND ?", (tid, ts.isoformat(), te.isoformat())).fetchone()["c"]
     hol = conn.execute(
         "SELECT COUNT(*) c FROM roster_day WHERE tech_id = ? AND code IN (?, ?) "
         "AND on_date BETWEEN ? AND ?", (tid, *ROSTER_HOLIDAY_CODES, *yr)).fetchone()["c"]
-    out["totals"] = {"year": y, "sick": sick, "holiday": hol}
+    out["totals"] = {"year": y, "holiday": hol, "sick": sick, "sick_since": ts.isoformat()}
     return out
 
 
