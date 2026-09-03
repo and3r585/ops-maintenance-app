@@ -848,6 +848,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_PATCH(self):
         self._dispatch("PATCH")
 
+    def do_DELETE(self):
+        self._dispatch("DELETE")
+
     def _dispatch(self, method):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -1090,7 +1093,7 @@ class Handler(BaseHTTPRequestHandler):
                 "WHERE asset_id = ? ORDER BY sort, name", (parts[1],),
             ).fetchall()
             history = conn.execute(
-                "SELECT occurred_on AS date, description, work_type, service_order, technicians, source "
+                "SELECT id, occurred_on AS date, description, work_type, service_order, technicians, source "
                 "FROM asset_history WHERE asset_id = ? "
                 "ORDER BY occurred_on DESC, id DESC", (parts[1],),
             ).fetchall()
@@ -1135,6 +1138,16 @@ class Handler(BaseHTTPRequestHandler):
                     (asset["id"], asset["id"], "defect", "Defect / operational issue",
                      "detail", old, new, user["id"], now()))
             return 200, {"ok": True, "defect": new}
+
+        # admin deletes a work-order / notification entry from an asset's history
+        if len(parts) == 2 and parts[0] == "history" and method == "DELETE":
+            self._require(conn, "ADMIN")
+            row = conn.execute("SELECT id FROM asset_history WHERE id = ?", (parts[1],)).fetchone()
+            if not row:
+                raise ApiError(404, "History entry not found")
+            conn.execute("UPDATE notif_request SET history_id = NULL WHERE history_id = ?", (row["id"],))
+            conn.execute("DELETE FROM asset_history WHERE id = ?", (row["id"],))
+            return 200, {"ok": True}
 
         # set / clear a service, blade, hv or retrofit record date (admin only)
         if len(parts) == 2 and parts[0] == "records" and method == "PATCH":

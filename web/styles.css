@@ -284,6 +284,12 @@ textarea { resize: vertical; min-height: 90px; }
 }
 .wo-desc { font-weight: 550; }
 .wo-techs { font-size: .82rem; color: var(--text-soft); margin-top: .15rem; }
+.wo-del {
+  margin-left: auto; background: none; border: 1px solid var(--border-2); cursor: pointer;
+  font: inherit; font-size: .72rem; font-weight: 600; color: var(--text-soft);
+  border-radius: var(--radius-sm); padding: .12rem .5rem;
+}
+.wo-del:hover { border-color: var(--danger); color: var(--danger); background: rgba(191,91,91,.08); }
 
 /* ---- planning board ---- */
 .drag-ghost {
@@ -364,7 +370,7 @@ textarea { resize: vertical; min-height: 90px; }
 @media (max-width: 900px) { .plan-layout { grid-template-columns: 1fr; } }
 .plan-rail {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: .9rem; position: sticky; top: 70px;
+  padding: .9rem; position: sticky; top: 70px; user-select: none; -webkit-user-select: none;
 }
 .rail-date { display: flex; flex-direction: column; gap: .25rem; font-size: .8rem; font-weight: 600; color: var(--text-soft); margin-bottom: .6rem; }
 .rail-head { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--text-soft); margin: .9rem 0 .4rem; }
@@ -458,7 +464,7 @@ textarea { resize: vertical; min-height: 90px; }
 .notif-members {
   flex-flow: row wrap; align-content: flex-start; min-height: 42px;
   border: 1px dashed var(--border-2); border-radius: var(--radius-sm); padding: .35rem;
-  margin-bottom: .8rem;
+  margin-bottom: .8rem; user-select: none; -webkit-user-select: none;
 }
 .notif-members.over { background: var(--accent-tint); box-shadow: inset 0 0 0 2px var(--accent); }
 .notif-members.reject { background: rgba(191,91,91,.08); box-shadow: inset 0 0 0 2px var(--danger); }

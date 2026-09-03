@@ -1258,12 +1258,21 @@ async function viewAsset(id) {
       const rows = hist.filter(e => !filter.value || e.work_type === filter.value);
       if (!rows.length) { list.append(h("div", { class: "empty-state" }, "No work orders on record for this turbine.")); return; }
       for (const e of rows) {
-        list.append(h("div", { class: "wo" },
-          h("div", { class: "wo-head" },
-            h("span", { class: "wo-date" }, fmtDate(e.date)),
-            e.work_type ? h("span", { class: "wo-type" }, e.work_type) : null,
-            e.service_order ? h("span", { class: "wo-so" }, "SO " + e.service_order) : null,
-            e.source === "notification" ? h("span", { class: "wo-src" }, "Notification request") : null),
+        const head = h("div", { class: "wo-head" },
+          h("span", { class: "wo-date" }, fmtDate(e.date)),
+          e.work_type ? h("span", { class: "wo-type" }, e.work_type) : null,
+          e.service_order ? h("span", { class: "wo-so" }, "SO " + e.service_order) : null,
+          e.source === "notification" ? h("span", { class: "wo-src" }, "Notification request") : null);
+        if (isAdmin && e.id != null) head.append(
+          h("button", {
+            class: "wo-del", title: "Delete this history entry",
+            onclick: async () => {
+              if (!confirm("Delete this history entry?\n\n" + fmtDate(e.date) + " — " + (e.description || ""))) return;
+              try { await api("/history/" + e.id, { method: "DELETE" }); toast("History entry deleted"); await reloadDetail(); }
+              catch (err) { toast(err.message, true); }
+            },
+          }, "Delete"));
+        list.append(h("div", { class: "wo" }, head,
           h("div", { class: "wo-desc" }, esc(e.description)),
           e.technicians ? h("div", { class: "wo-techs" }, e.technicians) : null));
       }
@@ -1284,6 +1293,11 @@ async function viewAsset(id) {
     pendings = (await api("/assets/" + id + "/pendings")).pendings;
     const btn = tabBar.querySelector('button[data-tab="Pendings"]');
     if (btn) btn.textContent = `Pendings (${pendings.length})`;
+    drawTab();
+  }
+
+  async function reloadDetail() {
+    detail = await api("/assets/" + id);
     drawTab();
   }
 
@@ -1405,6 +1419,7 @@ async function viewPlanning() {   /* Notification Request */
   let dragging = false;
   function startDrag(e, payload, el) {
     if (e.button != null && e.button !== 0) return;
+    e.preventDefault();                       // stop the browser starting a text selection
     const sx = e.clientX, sy = e.clientY;
     let ghost = null, zone = null;
     const move = (ev) => {
@@ -1431,6 +1446,7 @@ async function viewPlanning() {   /* Notification Request */
       document.removeEventListener("pointermove", move);
       document.removeEventListener("pointerup", up);
       document.body.style.cursor = "";
+      try { window.getSelection().removeAllRanges(); } catch (_) {}
       if (ghost) ghost.remove();
       el.classList.remove("dragging");
       if (zone) {
