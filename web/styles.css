@@ -554,6 +554,25 @@ td.r-none, .cal-sel.r-none { color: var(--text-faint); }
 select.cal-sel.r-kilg { color: #4c9666; }
 select.cal-sel.r-sick, select.cal-sel.r-abs { color: var(--danger); }
 
+/* day note marker (team calendar) */
+.cal-num { display: flex; align-items: center; justify-content: space-between; }
+.cal-note {
+  background: none; border: none; cursor: pointer; font-size: .85rem; line-height: 1;
+  padding: 0 0 0 .2rem; color: var(--text-faint);
+}
+.cal-note.has { color: var(--accent); }
+.cal-note:hover { color: var(--accent); }
+
+/* grid view: "who's available on this day" highlight */
+.roster-matrix .cal-day-th { cursor: pointer; user-select: none; }
+.roster-matrix .cal-day-th:hover { background: var(--surface); }
+.roster-matrix .cal-day-th.hi { background: var(--accent); color: #fff; }
+.roster-matrix td.avail { background: rgba(90,160,110,.28); color: #3f7d55; font-weight: 700; }
+.roster-matrix .rm-name.avail { background: rgba(90,160,110,.28); color: #3f7d55; }
+
+.btn.ghost.danger { color: var(--danger); }
+.btn.ghost.danger:hover { background: rgba(191,91,91,.1); }
+
 /* ---- condition monitoring (SMP) box ---- */
 .state-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: .8rem; }
 @media (max-width: 560px) { .state-row { grid-template-columns: 1fr; } }

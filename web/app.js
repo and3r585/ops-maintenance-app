@@ -808,6 +808,17 @@ async function viewExplorer() {
     catch (e) { clear(gridWrap); gridWrap.append(h("div", { class: "empty-state" }, e.message)); return; }
     [...catTabs.children].forEach(b => b.classList.toggle("active", b.textContent === data.label));
 
+    if (data.flat) {
+      const table = h("table", { class: "explorer-table" },
+        h("thead", {}, h("tr", {}, ...data.columns.map(c => h("th", {}, c)))),
+        h("tbody", {}, ...data.rows.map(r => h("tr", {}, ...r.cells.map(v => h("td", {}, v || ""))))));
+      clear(gridWrap);
+      gridWrap.append(data.rows.length ? table
+        : h("div", { class: "empty-state" }, "No " + data.label.toLowerCase() + " recorded."));
+      refreshFooter();
+      return;
+    }
+
     const isDate = data.value_field === "occurred_on";
     const table = h("table", { class: "explorer-table" });
     table.append(h("thead", {}, h("tr", {},
@@ -1650,7 +1661,9 @@ async function viewRoster() {
   let ym = new Date().toISOString().slice(0, 7);
   let scope = "";
   let layout = "calendar";
+  let gridDay = null;          // grid view: day column highlighted "who's available"
   let data;
+  const ROSTER_FREE = new Set(["", "KILG"]);   // available in Notification Request
 
   async function load() {
     data = await api("/roster?month=" + ym + (scope ? "&scope=" + encodeURIComponent(scope) : ""));
@@ -1662,6 +1675,7 @@ async function viewRoster() {
     const [y, m] = ym.split("-").map(Number);
     const d = new Date(y, m - 1 + delta, 1);
     ym = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+    gridDay = null;
   }
   function monthLabel() { const [y, m] = ym.split("-").map(Number); return ROSTER_MONTHS[m - 1] + " " + y; }
   async function reload() { try { await load(); draw(); } catch (e) { toast(e.message, true); } }
@@ -1712,9 +1726,48 @@ async function viewRoster() {
         } else if (code) cell.append(codeChip(code));
       }));
   }
+  function noteMarker(iso) {
+    const note = (data.notes || {})[iso];
+    if (!note && !data.can_edit) return null;
+    const btn = h("button", {
+      class: "cal-note" + (note ? " has" : ""),
+      title: note ? "Note — " + note.note : "Add a note",
+      onclick: (e) => { e.stopPropagation(); noteEditor(iso); },
+    }, note ? "★" : "☆");
+    return btn;
+  }
+  async function noteEditor(iso) {
+    const cur = (data.notes || {})[iso];
+    const ta = h("textarea", { rows: "4", placeholder: "Note for " + iso }, cur ? cur.note : "");
+    ta.disabled = !data.can_edit;
+    const backdrop = h("div", { class: "modal-backdrop" });
+    const close = () => backdrop.remove();
+    const save = async (text) => {
+      try {
+        await api("/roster/note", { method: "PATCH", body: { date: iso, note: text } });
+        close(); await load(); draw();
+        toast(text ? "Note saved" : "Note deleted");
+      } catch (e) { toast(e.message, true); }
+    };
+    const actions = [h("button", { class: "btn ghost", onclick: close }, "Cancel")];
+    if (data.can_edit) {
+      if (cur) actions.push(h("button", { class: "btn ghost danger", onclick: () => save("") }, "Delete"));
+      actions.push(h("button", { class: "btn primary", onclick: () => save(ta.value.trim()) }, "Save"));
+    }
+    backdrop.append(h("div", { class: "modal" },
+      h("h3", {}, "Note — " + fmtDate(iso)),
+      cur ? h("p", { class: "hint" }, "By " + (cur.author || "?") + " · " + fmtDate((cur.updated_at || "").slice(0, 10))) : null,
+      ta, h("div", { class: "btn-row", style: "justify-content:flex-end;margin-top:1rem" }, ...actions)));
+    backdrop.addEventListener("click", e => { if (e.target === backdrop) close(); });
+    document.body.append(backdrop);
+    ta.focus();
+  }
+
   function teamCalendar() {
     return h("div", { class: "card" }, h("h3", {}, "Team — " + monthLabel()),
       calShell((cell, iso) => {
+        const nm = noteMarker(iso);
+        if (nm) cell.querySelector(".cal-num").append(nm);
         const list = h("div", { class: "cal-team" });
         for (const t of data.techs) {
           const code = (data.entries[String(t.id)] || {})[iso];
@@ -1727,18 +1780,28 @@ async function viewRoster() {
   function teamGrid() {
     const cells = monthCells().filter(Boolean);
     const hr = h("tr", {}, h("th", { class: "rm-name" }, "Technician"));
-    cells.forEach(iso => hr.append(h("th", {}, +iso.slice(8))));
+    cells.forEach(iso => hr.append(h("th", {
+      class: "cal-day-th" + (gridDay === iso ? " hi" : ""),
+      title: "Highlight who's available " + iso,
+      onclick: () => { gridDay = (gridDay === iso ? null : iso); draw(); },
+    }, +iso.slice(8))));
     const tb = h("tbody", {});
     for (const t of data.techs) {
       const ent = data.entries[String(t.id)] || {};
-      const tr = h("tr", {}, h("td", { class: "rm-name" }, t.name));
+      const freeToday = gridDay && ROSTER_FREE.has(ent[gridDay] || "");
+      const tr = h("tr", {}, h("td", { class: "rm-name" + (freeToday ? " avail" : "") }, t.name));
       cells.forEach(iso => {
         const code = ent[iso] || "";
-        tr.append(h("td", { class: "r-" + codeSlug(code), title: code ? codeLabel(code) : "" }, code || ""));
+        const hi = gridDay === iso && ROSTER_FREE.has(code) ? " avail" : "";
+        tr.append(h("td", { class: "r-" + codeSlug(code) + hi, title: code ? codeLabel(code) : "" }, code || ""));
       });
       tb.append(tr);
     }
-    return h("div", { class: "card" }, h("h3", {}, "Team grid — " + monthLabel()),
+    const availCount = gridDay ? data.techs.filter(t => ROSTER_FREE.has((data.entries[String(t.id)] || {})[gridDay] || "")).length : 0;
+    return h("div", { class: "card" },
+      h("h3", {}, "Team grid — " + monthLabel()),
+      gridDay ? h("p", { class: "hint", style: "margin:-.3rem 0 .6rem" },
+        availCount + " available on " + fmtDate(gridDay) + " (green). Click the day again to clear.") : null,
       h("div", { class: "roster-scroll" },
         h("table", { class: "roster-matrix" }, h("thead", {}, hr), tb)));
   }
@@ -1817,7 +1880,7 @@ async function viewRoster() {
         h("option", { value: "team" }, "Team view"),
         ...data.techs.map(t => h("option", { value: "tech:" + t.id }, t.name)));
       sel.value = scope;
-      sel.addEventListener("change", () => { scope = sel.value; reload(); });
+      sel.addEventListener("change", () => { scope = sel.value; gridDay = null; reload(); });
       head.append(sel);
       if (scope === "team") head.append(h("div", { class: "cal-layout" },
         h("button", { class: layout === "calendar" ? "active" : "", onclick: () => { layout = "calendar"; draw(); } }, "Calendar"),

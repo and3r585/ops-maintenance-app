@@ -119,7 +119,8 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
     step shows every change as `was → new` before it is written to SQLite. Each save is
     written to a `record_changes` audit log. **Export this table (CSV)** dumps the current
     table as-is. **A cell that is blank in the database stays blank here** — no `—`, no
-    placeholder text.
+    placeholder text. A read-only **Roster notes** tab (Date · Note · Entered by) is also
+    listed here with its own CSV export.
   - *Completions report* — pick a from/to date and download an **.xlsx workbook** with a
     worksheet for **every** asset tab (Service dates, HV, Stat, Retrofits, Blades,
     Components) listing every record whose completion date falls in that window — whether
@@ -132,7 +133,11 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   `ABS` / `COVID` / `SD` / `ROST ON` / `ON CALL` / `OFF` / `PAT` / `JURY`) and a bottom
   banner: **sick days** (`SICK`) and **holidays used** (`HOL in WD` + `HOL Apprvd`) for the
   displayed month's calendar year. **Team** shows every technician — as a calendar (each day
-  lists who's on what) or a **grid** (technicians × days, colour-coded). Admins get **Manage
+  lists who's on what) or a **grid** (technicians × days, colour-coded); clicking a day
+  number in the grid highlights everyone **available** that day (blank / `KILG`) in green.
+  On the team calendar, any day can carry a free-text **note** (☆ / ★ marker → view / edit /
+  delete); notes are logged with date + author and show as a **Roster notes** tab in the
+  Data Explorer (with CSV export and a sheet in the completions report). Admins get **Manage
   technicians** to add (name + optional login link), archive (calendar kept, leaves
   Notification Request) and restore.
 - **Notification Request (admin)** — pick a **roster date**; the left rail shows **available

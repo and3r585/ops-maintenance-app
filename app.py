@@ -198,6 +198,15 @@ CREATE TABLE IF NOT EXISTS roster_day (
 );
 CREATE INDEX IF NOT EXISTS ix_roster_day_date ON roster_day(on_date);
 
+-- Free-text note against a roster day (team calendar). One per date.
+CREATE TABLE IF NOT EXISTS roster_note (
+    on_date    TEXT PRIMARY KEY,                 -- ISO date
+    note       TEXT NOT NULL,
+    author_id  INTEGER REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- Work-order history per asset (from the Job Request "SCOTT & STUART 2026" tab).
 CREATE TABLE IF NOT EXISTS asset_history (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -420,6 +429,14 @@ def seed():
         conn.execute("DROP TABLE IF EXISTS roster")
         _meta_set(conn, "roster_calendar_v1", "1")
 
+    # --- one-shot: a couple of named technicians that weren't TECHNICIAN-role logins
+    #     (Scott Clydesdale, Stuart Cant) but are in the Manplan and may join a team. ---
+    if not _meta_get(conn, "roster_extra_techs_v1"):
+        added = _add_roster_techs(conn, ["Scott Clydesdale", "Stuart Cant"])
+        if added:
+            print("  roster       added %d extra technician(s) from the Manplan grid" % added)
+        _meta_set(conn, "roster_extra_techs_v1", "1")
+
     # --- one-time turbine / asset / history import.
     #     Runs ONLY when the database has never been populated. Once assets exist the
     #     database is the sole source of truth and source/_archived/*.csv is never read.
@@ -506,6 +523,28 @@ def _seed_roster(conn):
                 (t, iso, code))
             days += 1
     return len(users), days
+
+
+def _add_roster_techs(conn, names):
+    """Add named technicians to roster_tech (linked to a login if the display name
+    matches) and backfill roster_day from the Manplan grid. Skips names already there."""
+    grid = None
+    added = 0
+    for name in names:
+        if conn.execute("SELECT 1 FROM roster_tech WHERE name = ?", (name,)).fetchone():
+            continue
+        u = conn.execute("SELECT id FROM users WHERE display_name = ?", (name,)).fetchone()
+        mx = conn.execute("SELECT COALESCE(MAX(sort), 0) m FROM roster_tech").fetchone()["m"]
+        cur = conn.execute(
+            "INSERT INTO roster_tech (name, user_id, active, sort, created_at) VALUES (?,?,1,?,?)",
+            (name, u["id"] if u else None, mx + 1, now()))
+        if grid is None:
+            grid = seed_data.load_roster()
+        for iso, code in (grid.get(name) or {}).items():
+            conn.execute("INSERT OR IGNORE INTO roster_day (tech_id, on_date, code) VALUES (?,?,?)",
+                         (cur.lastrowid, iso, code))
+        added += 1
+    return added
 
 
 def _first_time_import(conn):
@@ -707,6 +746,21 @@ EXPLORER_CATEGORIES = [
 ]
 EXPLORER_LABEL = {k: lbl for k, lbl, _ in EXPLORER_CATEGORIES}
 EXPLORER_VALUE_FIELD = {k: vf for k, _l, vf in EXPLORER_CATEGORIES}
+
+# read-only, non-turbine tables shown in the Data Explorer as a flat list
+EXPLORER_FLAT = {"roster_note": "Roster notes"}
+
+
+def explorer_flat(conn, category):
+    """(columns, rows) for a flat Data Explorer table."""
+    if category == "roster_note":
+        rows = conn.execute(
+            "SELECT n.on_date, n.note, u.display_name AS author "
+            "FROM roster_note n LEFT JOIN users u ON u.id = n.author_id "
+            "ORDER BY n.on_date").fetchall()
+        return (["Date", "Note", "Entered by"],
+                [[r["on_date"], r["note"], r["author"] or ""] for r in rows])
+    raise ApiError(404, "Unknown table")
 
 
 def explorer_matrix(conn, category, value_field):
@@ -1152,6 +1206,24 @@ class Handler(BaseHTTPRequestHandler):
                 conn.execute("DELETE FROM roster_day WHERE tech_id = ? AND on_date = ?", (tid, d))
             return 200, {"ok": True, "tech_id": tid, "date": d, "code": code}
 
+        if parts == ["roster", "note"] and method == "PATCH":
+            user = self._require(conn, "ADMIN")
+            data = self._json_body()
+            d = (data.get("date") or "").strip()
+            note = (data.get("note") or "").strip()
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", d):
+                raise ApiError(400, "A date is required (YYYY-MM-DD)")
+            if note:
+                conn.execute(
+                    "INSERT INTO roster_note (on_date, note, author_id, created_at, updated_at) "
+                    "VALUES (?,?,?,?,?) ON CONFLICT(on_date) DO UPDATE SET "
+                    "note = excluded.note, author_id = excluded.author_id, updated_at = excluded.updated_at",
+                    (d, note, user["id"], now(), now()))
+            else:
+                conn.execute("DELETE FROM roster_note WHERE on_date = ?", (d,))
+            return 200, {"ok": True, "date": d, "note": note,
+                         "author": user["display_name"] if note else None}
+
         if parts == ["roster", "techs"] and method == "GET":
             self._require(conn, ("ADMIN", "VIEW"))
             archived = query.get("archived", ["0"])[0] == "1"
@@ -1448,11 +1520,19 @@ class Handler(BaseHTTPRequestHandler):
             self._require(conn, ("ADMIN", "VIEW"))
             return 200, {"categories": [
                 {"key": k, "label": lbl, "value_field": vf}
-                for k, lbl, vf in EXPLORER_CATEGORIES]}
+                for k, lbl, vf in EXPLORER_CATEGORIES
+            ] + [
+                {"key": k, "label": lbl, "flat": True}
+                for k, lbl in EXPLORER_FLAT.items()
+            ]}
 
         if parts == ["explorer", "matrix"] and method == "GET":
             self._require(conn, ("ADMIN", "VIEW"))
             cat = (query.get("category", [""])[0] or "").strip()
+            if cat in EXPLORER_FLAT:
+                cols, rows = explorer_flat(conn, cat)
+                return 200, {"category": cat, "label": EXPLORER_FLAT[cat], "flat": True,
+                             "columns": cols, "rows": [{"cells": r} for r in rows]}
             if cat not in EXPLORER_VALUE_FIELD:
                 raise ApiError(404, "Unknown category")
             vf = EXPLORER_VALUE_FIELD[cat]
@@ -1465,12 +1545,19 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["explorer", "export"] and method == "GET":
             self._require(conn, ("ADMIN", "VIEW"))
             cat = (query.get("category", [""])[0] or "").strip()
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            if cat in EXPLORER_FLAT:
+                cols, rows = explorer_flat(conn, cat)
+                w.writerow(cols)
+                for r in rows:
+                    w.writerow(r)
+                fname = "explorer-%s-%s.csv" % (cat, today())
+                return 200, RawResponse(buf.getvalue(), "text/csv; charset=utf-8", fname)
             if cat not in EXPLORER_VALUE_FIELD:
                 raise ApiError(404, "Unknown category")
             vf = EXPLORER_VALUE_FIELD[cat]
             cols, by_tag = explorer_matrix(conn, cat, vf)
-            buf = io.StringIO()
-            w = csv.writer(buf)
             w.writerow(["Turbine"] + cols)
             for tag in sorted(by_tag):
                 line = [tag]
@@ -1577,6 +1664,17 @@ class Handler(BaseHTTPRequestHandler):
                 ])
             total += len(prows)
             sheets.append(("Pendings", pdata))
+
+            nrows = conn.execute(
+                "SELECT n.on_date, n.note, u.display_name AS author FROM roster_note n "
+                "LEFT JOIN users u ON u.id = n.author_id "
+                "WHERE n.on_date BETWEEN ? AND ? ORDER BY n.on_date", (frm, to)).fetchall()
+            ndata = [["Date", "Note", "Entered by"]]
+            for r in nrows:
+                ndata.append([r["on_date"], (r["note"] or "").replace("\r\n", " ").replace("\n", " "),
+                              r["author"] or ""])
+            total += len(nrows)
+            sheets.append(("Roster notes", ndata))
 
             if total == 0:
                 raise ApiError(404, "No completions recorded between %s and %s" % (frm, to))
@@ -1758,6 +1856,14 @@ def load_roster_month(conn, user, query):
         for r in rows:
             ent.setdefault(str(r["tech_id"]), {})[r["on_date"]] = r["code"]
         out["entries"] = ent
+        out["notes"] = {
+            r["on_date"]: {"note": r["note"], "author": r["author"],
+                           "updated_at": r["updated_at"]}
+            for r in conn.execute(
+                "SELECT n.on_date, n.note, n.updated_at, u.display_name AS author "
+                "FROM roster_note n LEFT JOIN users u ON u.id = n.author_id "
+                "WHERE n.on_date BETWEEN ? AND ?", (days[0], days[-1]))
+        }
         return out
 
     mm = re.match(r"^tech:(\d+)$", scope)
