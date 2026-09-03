@@ -447,7 +447,7 @@ function viewHome() {
         h("span", { class: "ico" }, "📅"),
         h("h3", {}, "Notification Request"),
         h("p", {}, isAdmin
-          ? "Drag technicians into teams, add a turbine, contract type and description, then export the notification requests and file them to asset history."
+          ? "Drag technicians into teams, add a contract type and description (turbine optional), then submit to export the requests and file them to asset history."
           : "See the day's notification requests — teams, turbines and descriptions.")),
       h("button", { class: "tile", onclick: () => navigate("#/explorer") },
         h("span", { class: "ico" }, "🗃️"),
@@ -1516,7 +1516,7 @@ async function viewPlanning() {   /* Notification Request */
     const ct = fieldSelect("contract_type", "— select contract type —",
       plan.contract_types || [], team.contract_type, { disabled: readOnly, redraw: true });
     const turb = fieldSelect("asset_id",
-      noTurbine ? "Not required for this contract type" : "— select turbine —",
+      noTurbine ? "Not required for this contract type" : "— no turbine (export only) —",
       noTurbine ? [] : (plan.turbines || []).map(t => ({ value: t.id, label: t.tag })),
       noTurbine ? "" : team.asset_id, { disabled: readOnly || noTurbine });
 
@@ -1537,20 +1537,16 @@ async function viewPlanning() {   /* Notification Request */
     card.append(
       h("div", { class: "notif-fields" },
         h("label", { class: "notif-lbl" }, "Contract type", ct.sel),
-        h("label", { class: "notif-lbl" }, "Turbine", turb.sel),
+        h("label", { class: "notif-lbl" }, "Turbine (optional)", turb.sel),
         h("label", { class: "notif-lbl wide" }, "Description", desc),
         h("label", { class: "notif-lbl wide" }, "ATS Case", ats)));
     return card;
   }
 
-  async function doExport(btn) {
-    await downloadFile("/notif/export?date=" + planDate, btn, "Notification requests exported",
-      "notification-requests-" + planDate + ".xlsx");
-  }
   async function doSubmit(btn) {
     const c = plan.complete_count || 0;
-    if (!confirm("Export " + c + " notification request(s), file the turbine ones to asset history, "
-      + "and clear the board for the next set?")) return;
+    if (!confirm("Submit " + c + " request" + (c === 1 ? "" : "s") + "? This downloads the .xlsx, "
+      + "files any with a turbine to that turbine's history, and clears the board.")) return;
     btn.disabled = true;
     try {
       // download the .xlsx of the current requests first…
@@ -1558,7 +1554,8 @@ async function viewPlanning() {   /* Notification Request */
         "notification-requests-" + planDate + ".xlsx");
       // …then file to history + clear the board
       plan = await api("/notif", { method: "POST", body: { date: planDate, op: "submit" } });
-      toast("Filed " + plan.filed + " to asset history · board cleared");
+      toast(plan.filed ? "Submitted — " + plan.filed + " filed to asset history, board cleared"
+                       : "Submitted — exported, board cleared");
       draw();
     } catch (e) { toast(e.message, true); }
     finally { btn.disabled = false; }
@@ -1611,14 +1608,10 @@ async function viewPlanning() {   /* Notification Request */
   function renderBar() {
     const complete = plan.complete_count || 0;
     const bar = h("div", { class: "notif-bar" },
-      h("span", {}, complete + " complete request(s)"));
+      h("span", {}, complete + " complete request" + (complete === 1 ? "" : "s")));
     if (!readOnly) {
-      const exportBtn = h("button", { class: "btn", disabled: complete ? null : "", onclick: () => doExport(exportBtn) }, "⭳ Export .xlsx");
-      const submitBtn = h("button", { class: "btn primary", disabled: plan.can_submit ? null : "", onclick: () => doSubmit(submitBtn) }, "Submit & clear");
-      bar.append(h("span", { class: "spacer" }), exportBtn, submitBtn);
-    } else if (complete) {
-      const exportBtn = h("button", { class: "btn", onclick: () => doExport(exportBtn) }, "⭳ Export .xlsx");
-      bar.append(h("span", { class: "spacer" }), exportBtn);
+      const submitBtn = h("button", { class: "btn primary", disabled: plan.can_submit ? null : "", onclick: () => doSubmit(submitBtn) }, "Submit Request");
+      bar.append(h("span", { class: "spacer" }), submitBtn);
     }
     const existing = board.querySelector(".notif-bar");
     if (existing) existing.replaceWith(bar); else board.append(bar);
@@ -1629,7 +1622,7 @@ async function viewPlanning() {   /* Notification Request */
       h("p", { class: "sub" }, readOnly
         ? "Read-only view. Pick a roster date to see that day's notification-request teams."
         : "Pick the roster date, drag technicians into teams of up to " + (plan.team_size || 4)
-          + ", add a turbine, contract type and description, then export and file to asset history.")),
+          + ", add a contract type and description (turbine optional), then Submit Request to export and file to asset history.")),
     h("div", { class: "plan-layout" }, rail, h("div", { class: "notif-wrap" }, board))));
   draw();
 }
