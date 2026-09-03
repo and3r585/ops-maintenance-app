@@ -990,7 +990,7 @@ class Handler(BaseHTTPRequestHandler):
             return 200, load_notif(conn, date)
 
         if parts == ["notif"] and method == "POST":
-            user = self._require(conn, "ADMIN")
+            self._require(conn, "ADMIN")
             data = self._json_body()
             date = (data.get("date") or today()).strip()
             if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
@@ -998,8 +998,11 @@ class Handler(BaseHTTPRequestHandler):
             op = data.get("op")
 
             if op == "submit":
-                _notif_submit(conn, date, user["id"])
-                return 200, load_notif(conn, date)
+                filed, cleared = _notif_submit(conn, date)
+                res = load_notif(conn, date)
+                res["filed"] = filed
+                res["cleared"] = cleared
+                return 200, res
 
             team_no = int(data.get("team_no") or 0)
             if not (1 <= team_no <= NOTIF_MAX_TEAMS):
@@ -1011,11 +1014,6 @@ class Handler(BaseHTTPRequestHandler):
                 conn.execute(
                     "INSERT INTO notif_request (plan_date, team_no, created_at) VALUES (?,?,?)",
                     (date, team_no, now()))
-                row = conn.execute(
-                    "SELECT * FROM notif_request WHERE plan_date=? AND team_no=?", (date, team_no)
-                ).fetchone()
-            if row["submitted_at"]:
-                raise ApiError(409, "Team %d has already been submitted to history" % team_no)
 
             if op == "add_member":
                 uid = data.get("user_id")
@@ -1055,6 +1053,10 @@ class Handler(BaseHTTPRequestHandler):
                     val = (val or "").strip() or None
                 conn.execute("UPDATE notif_request SET %s=? WHERE plan_date=? AND team_no=?" % field,
                              (val, date, team_no))
+                # a contract type that isn't turbine-specific drops any turbine already picked
+                if field == "contract_type" and val in NO_TURBINE_CONTRACTS:
+                    conn.execute("UPDATE notif_request SET asset_id=NULL WHERE plan_date=? AND team_no=?",
+                                 (date, team_no))
             elif op == "clear_team":
                 conn.execute("DELETE FROM notif_member WHERE plan_date=? AND team_no=?", (date, team_no))
                 conn.execute("DELETE FROM notif_request WHERE plan_date=? AND team_no=?", (date, team_no))
@@ -1588,6 +1590,13 @@ CONTRACT_TYPES = [
     "SUPERVISOR DUTIES", "VEHICLE CHECK", "WEATHER/STAND DOWN", "GENERAL ADMIN",
 ]
 
+# these contract types are not turbine-specific — no turbine number, and nothing
+# is filed to an asset's history on submit.
+NO_TURBINE_CONTRACTS = {
+    "STORES - SERVICE", "STORES - CORRECTIVE", "SUPERVISOR DUTIES",
+    "VEHICLE CHECK", "WEATHER/STAND DOWN", "GENERAL ADMIN",
+}
+
 # .xlsx column headers — must match the target sheet exactly for copy/paste.
 NOTIF_XLSX_HEADER = [
     "DATE", "Hub", "SITE ", "TURBINE NO.", "FUNCTIONAL LOCATION", "FLOC & EQUIPMENT",
@@ -1626,8 +1635,11 @@ def _notif_teams(conn, date):
 
 
 def _team_complete(t):
-    return bool(t["asset_id"] and t["contract_type"]
-               and (t["description"] or "").strip() and t["members"])
+    if not (t["contract_type"] and (t["description"] or "").strip() and t["members"]):
+        return False
+    if t["contract_type"] in NO_TURBINE_CONTRACTS:
+        return True
+    return bool(t["asset_id"])
 
 
 def load_notif(conn, date):
@@ -1672,10 +1684,20 @@ def load_notif(conn, date):
         "turbines": [dict(r) for r in conn.execute(
             "SELECT id, tag FROM assets ORDER BY tag")],
         "contract_types": CONTRACT_TYPES,
+        "no_turbine_contracts": sorted(NO_TURBINE_CONTRACTS),
         "complete_count": sum(1 for t in teams if _team_complete(t)),
-        "unsubmitted_complete": sum(1 for t in teams
-                                    if _team_complete(t) and not t["submitted_at"]),
+        "can_submit": _notif_can_submit(teams),
     }
+
+
+def _notif_nonempty(t):
+    return bool(t["members"] or t["asset_id"] or t["contract_type"]
+               or (t["description"] or "").strip() or (t["ats_case"] or "").strip())
+
+
+def _notif_can_submit(teams):
+    have = [t for t in teams if _notif_nonempty(t)]
+    return bool(have) and all(_team_complete(t) for t in have)
 
 
 def _notif_export_rows(conn, date):
@@ -1691,9 +1713,10 @@ def _notif_export_rows(conn, date):
             continue
         names = [m["display_name"] for m in t["members"]][:NOTIF_TEAM_SIZE]
         names += [""] * (6 - len(names))
+        turbine = "" if (t["contract_type"] in NO_TURBINE_CONTRACTS or not t["asset_tag"]) \
+            else "%s %s" % (t["asset_tag"], NOTIF_SITE)      # e.g. "B18 Kilgallioch"
         rows.append([
-            d, NOTIF_HUB, NOTIF_SITE,
-            "%s %s" % (t["asset_tag"], NOTIF_SITE),   # e.g. "B18 Kilgallioch"
+            d, NOTIF_HUB, NOTIF_SITE, turbine,
             "", "", t["contract_type"], "",
             (t["description"] or "").strip(), (t["ats_case"] or "").strip(),
             "", "", *names,
@@ -1701,36 +1724,37 @@ def _notif_export_rows(conn, date):
     return rows
 
 
-def _notif_submit(conn, date, user_id):
-    """Write every complete, not-yet-submitted team into its asset's history."""
+def _notif_submit(conn, date):
+    """File every turbine-specific team into its asset's history, then clear the
+    whole board for the date so it's ready for the next set of notifications.
+    Returns (filed_to_history, teams_cleared)."""
     teams = _notif_teams(conn, date)
-    have = [t for t in teams if t["members"] or t["asset_id"] or t["contract_type"]
-            or (t["description"] or "").strip() or (t["ats_case"] or "").strip()]
-    if not have:
-        raise ApiError(400, "Nothing to submit — add at least one team")
-    bad = [t["team_no"] for t in have if not _team_complete(t) and not t["submitted_at"]]
-    if bad:
-        raise ApiError(400, "Team %s: needs a turbine, contract type, description and "
-                       "at least one technician before it can be submitted"
-                       % ", ".join(map(str, bad)))
-    n = 0
+    if not _notif_can_submit(teams):
+        have = [t for t in teams if _notif_nonempty(t)]
+        if not have:
+            raise ApiError(400, "Nothing to submit — add at least one team")
+        bad = [t["team_no"] for t in have if not _team_complete(t)]
+        raise ApiError(400, "Team %s: add a contract type, a description, at least one "
+                       "technician, and a turbine (unless the contract type doesn't need "
+                       "one) before submitting." % ", ".join(map(str, bad)))
+    filed = 0
     for t in teams:
-        if not _team_complete(t) or t["submitted_at"]:
+        if not _team_complete(t):
             continue
-        techs = ", ".join(m["display_name"] for m in t["members"])
-        desc = (t["description"] or "").strip()
-        if (t["ats_case"] or "").strip():
-            desc += "  (ATS Case: %s)" % t["ats_case"].strip()
-        cur = conn.execute(
-            "INSERT INTO asset_history (asset_id, occurred_on, description, work_type, "
-            "service_order, technicians, source) VALUES (?,?,?,?,?,?,'notification')",
-            (t["asset_id"], date, desc, t["contract_type"], None, techs))
-        conn.execute(
-            "UPDATE notif_request SET submitted_at=?, submitted_by=?, history_id=? "
-            "WHERE plan_date=? AND team_no=?",
-            (now(), user_id, cur.lastrowid, date, t["team_no"]))
-        n += 1
-    return n
+        if t["asset_id"] and t["contract_type"] not in NO_TURBINE_CONTRACTS:
+            techs = ", ".join(m["display_name"] for m in t["members"])
+            desc = (t["description"] or "").strip()
+            if (t["ats_case"] or "").strip():
+                desc += "  (ATS Case: %s)" % t["ats_case"].strip()
+            conn.execute(
+                "INSERT INTO asset_history (asset_id, occurred_on, description, work_type, "
+                "service_order, technicians, source) VALUES (?,?,?,?,?,?,'notification')",
+                (t["asset_id"], date, desc, t["contract_type"], None, techs))
+            filed += 1
+    cleared = len(teams)
+    conn.execute("DELETE FROM notif_member WHERE plan_date=?", (date,))
+    conn.execute("DELETE FROM notif_request WHERE plan_date=?", (date,))
+    return filed, cleared
 
 
 def _service_month(name):

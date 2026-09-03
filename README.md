@@ -126,15 +126,17 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   technicians** as draggable chips (unavailable ones greyed with their reason, from the
   *Manplan 2025* day grid — unavailable = `HOL in WD` / `MED` / `SICK` / `ABS` / `TRG` /
   `PAT` / `JURY`, blank or anything else = available). Drag technicians into **teams of up
-  to 4**; give each team a **turbine**, a **contract type** (dropdown mirrored from the
-  notification-request workbook), a **description** and an optional **ATS Case**. A fresh
-  empty team appears once the previous one has a technician, and stops when no available
-  technicians remain. A technician placed on more than one team that date raises a
-  duplicate **warning** (not a block). **Export .xlsx** downloads the requests laid out for
-  copy/paste into the target sheet (Hub `SO5`, Site `Kilgallioch`, turbine as
-  `<tag> Kilgallioch`, six technician columns). **Submit to history & export** additionally
-  files every complete team into that turbine's **History** tab (tagged *Notification
-  request*) and locks it.
+  to 4**; give each team a **contract type** (dropdown mirrored from the notification-request
+  workbook), a **turbine**, a **description** and an optional **ATS Case**. Six contract
+  types are not turbine-specific — `STORES - SERVICE`, `STORES - CORRECTIVE`,
+  `SUPERVISOR DUTIES`, `VEHICLE CHECK`, `WEATHER/STAND DOWN`, `GENERAL ADMIN` — and hide the
+  turbine field. A fresh empty team appears once the previous one has a technician, and
+  stops when no available technicians remain. A technician placed on more than one team that
+  date raises a duplicate **warning** (not a block). **Export .xlsx** downloads the requests
+  laid out for copy/paste into the target sheet (Hub `SO5`, Site `Kilgallioch`, turbine as
+  `<tag> Kilgallioch` or blank, six technician columns). **Submit & clear** downloads that
+  .xlsx, files every turbine-specific request into that turbine's **History** tab (tagged
+  *Notification request*), and clears the whole board for the next set of the day.
 - **Asset detail** — tabs for **Details**, **Service dates**, **HV history**, **Stat history**,
   **Retrofits**, **Blades**, **Components**, **History** and **Pendings**, with **‹ ›**
   previous/next-turbine buttons in the header that step through the register alphabetically

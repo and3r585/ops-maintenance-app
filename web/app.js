@@ -1467,19 +1467,19 @@ async function viewPlanning() {   /* Notification Request */
     document.addEventListener("pointerup", up);
   }
 
-  function techChip(t, fromTeam, locked) {
+  function techChip(t, fromTeam) {
     const off = !!t.reason;
     const dup = (plan.duplicates || []).some(d => d.id === t.id);
     const chip = h("div", { class: "tech-chip" + (off ? " off" : "") + (fromTeam ? " placed" : "") + (dup ? " dup" : "") },
       h("span", { class: "tc-name" }, t.display_name),
-      (fromTeam && !readOnly && !locked)
+      (fromTeam && !readOnly)
         ? h("button", { class: "chip-x", title: "Remove", onclick: () => mutate({ op: "remove_member", team_no: +fromTeam, user_id: t.id }) }, "×")
         : (off ? h("span", { class: "chip-reason" }, REASON_LABEL[t.reason] || t.reason) : null));
-    if (!off && !readOnly && !locked) chip.addEventListener("pointerdown", (e) => startDrag(e, { kind: "tech", id: t.id, fromTeam }, chip));
+    if (!off && !readOnly) chip.addEventListener("pointerdown", (e) => startDrag(e, { kind: "tech", id: t.id, fromTeam }, chip));
     return chip;
   }
 
-  function fieldSelect(team, field, blank, options, curVal) {
+  function fieldSelect(field, blank, options, curVal, { disabled, redraw } = {}) {
     const sel = h("select", {},
       h("option", { value: "" }, blank),
       ...options.map(o => {
@@ -1489,48 +1489,55 @@ async function viewPlanning() {   /* Notification Request */
         if (String(curVal ?? "") === val) opt.selected = true;
         return opt;
       }));
-    sel.disabled = readOnly || !!team.submitted_at;
-    sel.addEventListener("change", () => saveField(team.team_no, field, sel.value));
-    return sel;
+    sel.disabled = !!disabled;
+    return { sel, field, redraw };
   }
+
+  const NO_TURBINE = new Set(plan.no_turbine_contracts || []);
 
   function teamCard(team, isNew) {
     const n = team.team_no;
     const size = plan.team_size || 4;
-    const submitted = !!team.submitted_at;
-    const card = h("div", { class: "notif-team" + (submitted ? " submitted" : "") });
+    const noTurbine = NO_TURBINE.has(team.contract_type);
+    const card = h("div", { class: "notif-team" });
 
     const head = h("div", { class: "notif-team-head" }, h("h3", {}, "Team " + n));
-    if (submitted) head.append(h("span", { class: "notif-filed" }, "✓ Filed to " + (team.asset_tag || "asset") + " history"));
-    else if (!readOnly && !isNew) head.append(
+    if (!readOnly && !isNew) head.append(
       h("button", { class: "link-btn danger", onclick: () => { if (confirm("Remove Team " + n + "?")) mutate({ op: "clear_team", team_no: n }); } }, "Remove team"));
     card.append(head);
 
     const full = team.members.length >= size;
-    const memZone = h("div", { class: "notif-members dropzone2", "data-accept": submitted ? "" : "tech", "data-team": n, "data-full": (full || submitted) ? "1" : "0" });
-    team.members.forEach(m => memZone.append(techChip(m, n, submitted)));
-    if (!submitted && !readOnly && !full)
+    const memZone = h("div", { class: "notif-members dropzone2", "data-accept": "tech", "data-team": n, "data-full": full ? "1" : "0" });
+    team.members.forEach(m => memZone.append(techChip(m, n)));
+    if (!readOnly && !full)
       memZone.append(h("span", { class: "slot-hint" }, team.members.length ? "Drop another technician" : "Drop technicians here (up to " + size + ")"));
-    if (submitted && !team.members.length) memZone.append(h("span", { class: "slot-hint" }, "—"));
     card.append(h("label", { class: "notif-lbl" }, "Technicians (" + team.members.length + "/" + size + ")"), memZone);
 
-    const turbSel = fieldSelect(team, "asset_id", "— select turbine —",
-      (plan.turbines || []).map(t => ({ value: t.id, label: t.tag })), team.asset_id);
-    const ctSel = fieldSelect(team, "contract_type", "— select contract type —",
-      plan.contract_types || [], team.contract_type);
+    const ct = fieldSelect("contract_type", "— select contract type —",
+      plan.contract_types || [], team.contract_type, { disabled: readOnly, redraw: true });
+    const turb = fieldSelect("asset_id",
+      noTurbine ? "Not required for this contract type" : "— select turbine —",
+      noTurbine ? [] : (plan.turbines || []).map(t => ({ value: t.id, label: t.tag })),
+      noTurbine ? "" : team.asset_id, { disabled: readOnly || noTurbine });
+
+    for (const { sel, field, redraw } of [ct, turb]) {
+      sel.addEventListener("change", () =>
+        redraw ? mutate({ op: "set_field", team_no: n, field, value: sel.value })
+               : saveField(n, field, sel.value));
+    }
 
     const desc = h("textarea", { rows: "2", placeholder: "Notification description" }, team.description || "");
-    desc.disabled = readOnly || submitted;
+    desc.disabled = readOnly;
     desc.addEventListener("change", () => saveField(n, "description", desc.value));
 
     const ats = h("input", { type: "text", placeholder: "ATS Case (optional)", value: team.ats_case || "" });
-    ats.disabled = readOnly || submitted;
+    ats.disabled = readOnly;
     ats.addEventListener("change", () => saveField(n, "ats_case", ats.value));
 
     card.append(
       h("div", { class: "notif-fields" },
-        h("label", { class: "notif-lbl" }, "Turbine", turbSel),
-        h("label", { class: "notif-lbl" }, "Contract type", ctSel),
+        h("label", { class: "notif-lbl" }, "Contract type", ct.sel),
+        h("label", { class: "notif-lbl" }, "Turbine", turb.sel),
         h("label", { class: "notif-lbl wide" }, "Description", desc),
         h("label", { class: "notif-lbl wide" }, "ATS Case", ats)));
     return card;
@@ -1541,14 +1548,18 @@ async function viewPlanning() {   /* Notification Request */
       "notification-requests-" + planDate + ".xlsx");
   }
   async function doSubmit(btn) {
-    if (!confirm("Submit " + plan.unsubmitted_complete + " completed team(s) to asset history and export the .xlsx? "
-      + "Filed entries can't be edited here afterwards.")) return;
+    const c = plan.complete_count || 0;
+    if (!confirm("Export " + c + " notification request(s), file the turbine ones to asset history, "
+      + "and clear the board for the next set?")) return;
     btn.disabled = true;
     try {
+      // download the .xlsx of the current requests first…
+      await downloadFile("/notif/export?date=" + planDate, btn, null,
+        "notification-requests-" + planDate + ".xlsx");
+      // …then file to history + clear the board
       plan = await api("/notif", { method: "POST", body: { date: planDate, op: "submit" } });
+      toast("Filed " + plan.filed + " to asset history · board cleared");
       draw();
-      toast("Filed to asset history");
-      await doExport(btn);
     } catch (e) { toast(e.message, true); }
     finally { btn.disabled = false; }
   }
@@ -1587,7 +1598,7 @@ async function viewPlanning() {   /* Notification Request */
       && (!last || last.members.length > 0);
     if (showNew) {
       board.append(teamCard({ team_no: nextNo, members: [], asset_id: null, contract_type: null,
-        description: "", ats_case: "", submitted_at: null }, true));
+        description: "", ats_case: "" }, true));
     } else if (!teams.length) {
       board.append(h("div", { class: "empty-state" },
         readOnly ? "No notification requests for this date."
@@ -1600,11 +1611,10 @@ async function viewPlanning() {   /* Notification Request */
   function renderBar() {
     const complete = plan.complete_count || 0;
     const bar = h("div", { class: "notif-bar" },
-      h("span", {}, complete + " complete team(s)"
-        + (plan.unsubmitted_complete ? " · " + plan.unsubmitted_complete + " not yet filed" : "")));
+      h("span", {}, complete + " complete request(s)"));
     if (!readOnly) {
       const exportBtn = h("button", { class: "btn", disabled: complete ? null : "", onclick: () => doExport(exportBtn) }, "⭳ Export .xlsx");
-      const submitBtn = h("button", { class: "btn primary", disabled: plan.unsubmitted_complete ? null : "", onclick: () => doSubmit(submitBtn) }, "Submit to history & export");
+      const submitBtn = h("button", { class: "btn primary", disabled: plan.can_submit ? null : "", onclick: () => doSubmit(submitBtn) }, "Submit & clear");
       bar.append(h("span", { class: "spacer" }), exportBtn, submitBtn);
     } else if (complete) {
       const exportBtn = h("button", { class: "btn", onclick: () => doExport(exportBtn) }, "⭳ Export .xlsx");
