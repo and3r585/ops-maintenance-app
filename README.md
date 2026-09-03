@@ -15,21 +15,27 @@ python3 app.py
 Then open http://localhost:8000
 
 ```bash
-python3 app.py --port 9000   # different port
-python3 app.py --reset       # DESTRUCTIVE: delete data/ and re-seed from source/*.csv
+python3 app.py --port 9000        # different port
+python3 app.py --reset --force    # DESTRUCTIVE: wipe data/app.db and rebuild from source/_archived/*.csv
 ```
 
-### Where your data lives
+### The database is the source of truth
 
-Everything entered *through the app* — pending entries, completion photos/comments, dates
-added or edited in Asset Information or the Data Explorer — is written to the SQLite file
-`data/app.db` (or `$DATA_DIR/app.db`). It **persists across restarts**: plain `python3 app.py`
-keeps it, and re-seeding only fills tables that are still empty, so your entries are never
-touched.
+The initial import from the spreadsheet CSVs has been done. `data/app.db` (or
+`$DATA_DIR/app.db`) is now the **only** live datastore — the app reads nothing from the
+CSVs in normal operation. Everything entered through the app (pending entries, completion
+photos/comments, dates edited in Asset Information or the Data Explorer) is written straight
+to it and **persists across restarts**: plain `python3 app.py` keeps it, and the seed step
+only touches tables that are completely empty.
 
-The **only** things that wipe it:
-- `python3 app.py --reset` (deletes `data/` on purpose)
-- deleting `data/` yourself
+The ten import CSVs now live in [`source/_archived/`](source/_archived/) and are read **only**
+to rebuild a fresh, empty database. `source/Credentials.csv` is *not* archived — it stays as
+the live login list, re-synced into the `users` table on every start.
+
+The **only** things that wipe `data/app.db`:
+- `python3 app.py --reset --force` — refuses without `--force` once the DB holds any
+  app-entered data (photos, edits, day plans, technician-logged pendings)
+- deleting the file yourself
 - a host with an **ephemeral filesystem** (see Render note below)
 
 The startup banner prints the DB path, whether it was kept or freshly seeded, and how many
@@ -167,13 +173,14 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
 
 ## Data
 
-**Every row in the database traces to one of the `source/*.csv` files** — there is no
-hand-written sample data. `seed_data.py` parses the CSVs on first run (`--reset` to re-seed
-after editing a CSV); nothing is needed at runtime once the DB is built. Dates in any of
-`YYYY-MM-DD`, `DD/MM/YYYY` or `Weekday, D Month YYYY` form are all accepted. The planning
-board's task backlog is drawn straight from the imported pending entries.
+The database was seeded from these CSVs once. `data/app.db` is now authoritative and the
+files below are **archived in [`source/_archived/`](source/_archived/)** — `seed_data.load_data()`
+reads them only when `data/app.db` is empty (a from-scratch rebuild). Every seeded row still
+traces to one of them; the [data-sources map](https://claude.ai/code/artifact/e763117e-d7a1-4b71-89e6-94fb6da8bb40)
+documents the column-by-column mapping. Dates in any of `YYYY-MM-DD`, `DD/MM/YYYY` or
+`Weekday, D Month YYYY` form are accepted.
 
-| `source/` file | feeds |
+| archived file | fed |
 |---|---|
 | `KGH_2025.csv` | turbine list, service completion dates (72–114 month), the per-turbine defect note (col G) |
 | `HV.csv` | HV maintenance history |
@@ -185,7 +192,9 @@ board's task backlog is drawn straight from the imported pending entries.
 | `Manplan.csv` | the day-by-day technician availability roster |
 | `Job_Request.csv` | per-turbine work-order log |
 | `Pendings.csv` | open pending notifications per turbine |
-| `Credentials.csv` | login accounts — username, password, Admin / View / Tech (synced on every start) |
+
+`source/Credentials.csv` (**not** archived) — login accounts: username, password,
+Admin / View / Tech; re-synced into `users` on every start.
 
 ## Extending it later
 
@@ -196,13 +205,14 @@ in `web/app.js`.
 ## Layout
 
 ```
-app.py            server + schema + seed orchestration + photo handling
-seed_data.py      CSV parsers -> structures the seeder consumes
-source/*.csv      one CSV per source-spreadsheet tab (one-time import)
-render.yaml       Render deploy blueprint
-requirements.txt  Pillow
-web/index.html    SPA shell
-web/app.js        views, router, planning board
-web/styles.css    Claude-inspired theme (light + dark, follows OS, manual toggle ◐)
-data/             created at runtime — SQLite db + uploaded photos (+ _thumb.jpg)
+app.py               server + schema + seed orchestration + photo handling
+seed_data.py         CSV parsers (load_credentials every boot; load_data only to rebuild)
+source/Credentials.csv   live login list, re-synced each start
+source/_archived/*.csv   the one-time import — read only to rebuild an empty DB
+render.yaml          Render deploy blueprint
+requirements.txt     Pillow
+web/index.html       SPA shell
+web/app.js           views, router, planning board
+web/styles.css       Claude-inspired theme (light + dark, follows OS, manual toggle ◐)
+data/                created at runtime — SQLite db + uploaded photos (+ _thumb.jpg)
 ```

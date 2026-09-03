@@ -362,10 +362,37 @@ def seed():
             "PRAGMA foreign_keys=ON;"
         )
 
-    data = seed_data.load()
+    # --- users: synced from source/Credentials.csv on every start (+ `admin` break-glass) ---
+    sync_users(conn, seed_data.load_credentials())
 
-    # --- users: synced from Credentials.csv on every start (+ an `admin` break-glass) ---
-    sync_users(conn, data["credentials"])
+    # --- one-time turbine / asset / history import.
+    #     Runs ONLY when the database has never been populated. Once assets exist the
+    #     database is the sole source of truth and source/_archived/*.csv is never read.
+    if conn.execute("SELECT COUNT(*) c FROM assets").fetchone()["c"] == 0:
+        _first_time_import(conn)
+
+    # navigation registry — re-synced every start so role changes take effect.
+    #   technicians: Site Dashboard + Asset Information   admins: + Planning + Data Explorer
+    for key, name, min_role, sort in [
+        ("dashboard", "Site Dashboard", "TECHNICIAN", 5),
+        ("assets", "Asset Information", "TECHNICIAN", 10),
+        ("planning", "Planning", "ADMIN", 20),
+        ("explorer", "Data Explorer", "ADMIN", 30),
+    ]:
+        if conn.execute("SELECT 1 FROM modules WHERE key = ?", (key,)).fetchone():
+            conn.execute("UPDATE modules SET name=?, min_role=?, sort=?, enabled=1 WHERE key=?",
+                         (name, min_role, sort, key))
+        else:
+            conn.execute("INSERT INTO modules (key,name,enabled,min_role,sort) VALUES (?,?,1,?,?)",
+                         (key, name, min_role, sort))
+
+    conn.commit()
+    conn.close()
+
+
+def _first_time_import(conn):
+    """Populate an empty database from the archived one-time-import CSVs."""
+    data = seed_data.load_data()
 
     # --- assets: one per turbine in KGH 2025.csv (+ its defect note, col G) ---
     if conn.execute("SELECT COUNT(*) c FROM assets").fetchone()["c"] == 0:
@@ -469,24 +496,7 @@ def seed():
                 (aid[p["tag"]], admin_id, p["note"], p["status"],
                  p["wo_code"], p["priority"], p["system"], p["created_at"] or now()),
             )
-
-    # navigation registry — re-synced every start so role changes take effect.
-    #   technicians: Site Dashboard + Asset Information   admins: + Planning + Data Explorer
-    for key, name, min_role, sort in [
-        ("dashboard", "Site Dashboard", "TECHNICIAN", 5),
-        ("assets", "Asset Information", "TECHNICIAN", 10),
-        ("planning", "Planning", "ADMIN", 20),
-        ("explorer", "Data Explorer", "ADMIN", 30),
-    ]:
-        if conn.execute("SELECT 1 FROM modules WHERE key = ?", (key,)).fetchone():
-            conn.execute("UPDATE modules SET name=?, min_role=?, sort=?, enabled=1 WHERE key=?",
-                         (name, min_role, sort, key))
-        else:
-            conn.execute("INSERT INTO modules (key,name,enabled,min_role,sort) VALUES (?,?,1,?,?)",
-                         (key, name, min_role, sort))
-
-    conn.commit()
-    conn.close()
+    print("  imported     turbines, services, history and pendings from source/_archived/")
 
 
 def sync_users(conn, creds):
@@ -1533,22 +1543,46 @@ def load_pendings(conn, asset_id):
 # Entrypoint
 # ---------------------------------------------------------------------------
 
+def _guard_reset(force):
+    """Refuse --reset if the database holds data that was entered through the app
+    (photos, record edits, day plans, technician-logged pendings) unless --force."""
+    try:
+        c = get_db()
+        n = sum(c.execute("SELECT COUNT(*) c FROM " + t).fetchone()["c"]
+                for t in ("pending_photos", "record_changes", "plan_team"))
+        n += c.execute("SELECT COUNT(*) c FROM pending_entries WHERE wo_code IS NULL").fetchone()["c"]
+        c.close()
+    except sqlite3.Error:
+        n = -1                                   # can't tell -> treat as risky
+    if n != 0 and not force:
+        detail = "an unreadable schema" if n < 0 else "%d app-entered item(s)" % n
+        sys.exit(
+            "\n  --reset refused: data/app.db contains %s\n"
+            "  (photos / record edits / day plans / logged pendings).\n"
+            "  This deletes them permanently. Re-run with  --reset --force  only if\n"
+            "  you are certain, or back up data/app.db first.\n" % detail)
+
+
 def main():
     # A hosted process (Render/Railway/Fly/…) sets $PORT and needs 0.0.0.0.
     env_port = os.environ.get("PORT")
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=int(env_port) if env_port else 8000)
     ap.add_argument("--host", default=os.environ.get("HOST", "0.0.0.0" if env_port else "127.0.0.1"))
-    ap.add_argument("--reset", action="store_true", help="wipe data and reseed")
+    ap.add_argument("--reset", action="store_true",
+                    help="DESTRUCTIVE: delete data/app.db and re-import from source/_archived/*.csv")
+    ap.add_argument("--force", action="store_true",
+                    help="allow --reset even when the database holds app-entered data")
     args = ap.parse_args()
 
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     fresh = not os.path.exists(DB_PATH)
     if args.reset and os.path.exists(DB_PATH):
+        _guard_reset(args.force)
         os.remove(DB_PATH)
         fresh = True
-        print("  !! --reset: wiped data/app.db (all app-entered pendings and edits gone)")
+        print("  !! --reset: wiped data/app.db")
     seed()
     backfill_thumbs()
 

@@ -11,8 +11,13 @@ import os
 import re
 
 SOURCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "source")
+ARCHIVE_DIR = os.path.join(SOURCE_DIR, "_archived")
 
-FILES = {
+# Credentials.csv stays in source/ and is re-synced into the users table on every
+# start (live config). The rest were a one-time import — they live in
+# source/_archived/ and are read only to rebuild a completely empty database.
+CRED_FILE = "Credentials.csv"
+DATA_FILES = {
     "kgh2025": "KGH_2025.csv",
     "retro": "25_KGH_Retro.csv",
     "hv": "HV.csv",
@@ -23,7 +28,6 @@ FILES = {
     "manplan": "Manplan.csv",
     "jobreq": "Job_Request.csv",
     "pendings": "Pendings.csv",
-    "credentials": "Credentials.csv",
 }
 
 # ---------------------------------------------------------------------------
@@ -34,9 +38,18 @@ _BAD = {"", "#REF!", "#N/A", "N/A", "NA", "-", "--", "TBC", "TBA", "FALSE",
         "TRUE", "OK", "NONE", "?", "N/A ", "NA "}
 
 
-def _rows(name):
-    with open(os.path.join(SOURCE_DIR, name), newline="", encoding="utf-8-sig") as fh:
+def _rows(path):
+    with open(path, newline="", encoding="utf-8-sig") as fh:
         return [[c.strip() for c in row] for row in csv.reader(fh)]
+
+
+def _data_rows(key):
+    path = os.path.join(ARCHIVE_DIR, DATA_FILES[key])
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            "%s is missing. The one-time import CSVs live in source/_archived/ and "
+            "are only needed to rebuild an empty database." % path)
+    return _rows(path)
 
 
 def _get(row, i):
@@ -402,29 +415,39 @@ def _pendings(rows):
 
 
 # ---------------------------------------------------------------------------
-# public entry point
+# public entry points
 # ---------------------------------------------------------------------------
 
-def load():
-    order, services, defects, blades = _kgh2025(_rows(FILES["kgh2025"]))
-    names, roster = _manplan(_rows(FILES["manplan"]))
+def load_credentials():
+    """source/Credentials.csv -> login accounts. Read on every server start."""
+    return _credentials(_rows(os.path.join(SOURCE_DIR, CRED_FILE)))
+
+
+def load_data():
+    """The one-time turbine / asset / history import from source/_archived/*.csv.
+    Only called when the database is completely empty."""
+    order, services, defects, blades = _kgh2025(_data_rows("kgh2025"))
+    names, roster = _manplan(_data_rows("manplan"))
     return {
         "turbines": order,
         "technicians": names,
-        "credentials": _credentials(_rows(FILES["credentials"])),
         "services": services,
         "defects": defects,
         "blades": blades,
-        "hv": _hv(_rows(FILES["hv"])),
-        "stat": _stats(_rows(FILES["stats"])),
-        "retrofits": _retrofits(_rows(FILES["retro"])),
-        "components": _components(_rows(FILES["components"])),
-        "equipment": _equipment(_rows(FILES["equipment"])),
-        "smp": _smp(_rows(FILES["smp"])),
+        "hv": _hv(_data_rows("hv")),
+        "stat": _stats(_data_rows("stats")),
+        "retrofits": _retrofits(_data_rows("retro")),
+        "components": _components(_data_rows("components")),
+        "equipment": _equipment(_data_rows("equipment")),
+        "smp": _smp(_data_rows("smp")),
         "roster": roster,
-        "history": _jobreq(_rows(FILES["jobreq"])),
-        "pendings": _pendings(_rows(FILES["pendings"])),
+        "history": _jobreq(_data_rows("jobreq")),
+        "pendings": _pendings(_data_rows("pendings")),
     }
+
+
+def load():  # full set — used by the sanity dump below
+    return {**load_data(), "credentials": load_credentials()}
 
 
 if __name__ == "__main__":  # quick sanity dump
