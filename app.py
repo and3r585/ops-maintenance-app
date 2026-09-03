@@ -371,6 +371,10 @@ def seed():
     if conn.execute("SELECT COUNT(*) c FROM assets").fetchone()["c"] == 0:
         _first_time_import(conn)
 
+    # --- condition monitoring (SMP): replaced wholesale from source/KGH_SMP.csv every
+    #     start (after the assets exist) ---
+    sync_smp(conn, seed_data.load_smp())
+
     # navigation registry — re-synced every start so role changes take effect.
     #   technicians: Site Dashboard + Asset Information   admins: + Planning + Data Explorer
     for key, name, min_role, sort in [
@@ -415,15 +419,7 @@ def _first_time_import(conn):
                  e["install_date"], e["toc"], e["warranty_expiry"], tag),
             )
 
-    # --- condition monitoring: KGH SMP Action Tracker.csv ---
-    if conn.execute("SELECT COUNT(*) c FROM assets WHERE smp_gearbox IS NOT NULL").fetchone()["c"] == 0:
-        for tag, s in data["smp"].items():
-            conn.execute(
-                "UPDATE assets SET smp_data_date=?, smp_gearbox=?, smp_generator=?, "
-                "smp_main_bearing=?, smp_observations=? WHERE tag=?",
-                (s["data_date"], s["gearbox"], s["generator"],
-                 s["main_bearing"], s["observations"], tag),
-            )
+    # (condition monitoring / SMP is synced separately, on every start — see sync_smp)
 
     # --- service / HV / stat / retrofit / component records ---
     if conn.execute("SELECT COUNT(*) c FROM asset_records").fetchone()["c"] == 0:
@@ -536,6 +532,23 @@ def sync_users(conn, creds):
     for uname, row in existing.items():
         if uname not in keep and row["active"]:
             conn.execute("UPDATE users SET active=0 WHERE username=?", (uname,))
+
+
+def sync_smp(conn, smp):
+    """Replace every asset's condition-monitoring (SMP) state from source/KGH_SMP.csv.
+    The old values are discarded wholesale each start; a turbine absent from the file
+    is left blank."""
+    conn.execute("UPDATE assets SET smp_data_date=NULL, smp_gearbox=NULL, "
+                 "smp_generator=NULL, smp_main_bearing=NULL, smp_observations=NULL")
+    applied = 0
+    for tag, s in (smp or {}).items():
+        cur = conn.execute(
+            "UPDATE assets SET smp_data_date=?, smp_gearbox=?, smp_generator=?, "
+            "smp_main_bearing=?, smp_observations=? WHERE tag=?",
+            (s.get("data_date"), s.get("gearbox"), s.get("generator"),
+             s.get("main_bearing"), s.get("observations"), tag))
+        applied += cur.rowcount
+    return applied
 
 
 # ---------------------------------------------------------------------------
@@ -1655,6 +1668,7 @@ def main():
     n_pend = conn.execute("SELECT COUNT(*) c FROM pending_entries").fetchone()["c"]
     n_app = conn.execute("SELECT COUNT(*) c FROM pending_entries WHERE wo_code IS NULL").fetchone()["c"]
     n_edits = conn.execute("SELECT COUNT(*) c FROM record_changes").fetchone()["c"]
+    n_smp = conn.execute("SELECT COUNT(*) c FROM assets WHERE smp_gearbox IS NOT NULL").fetchone()["c"]
     conn.close()
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
@@ -1663,6 +1677,7 @@ def main():
     print("  " + "-" * 40)
     print("  running at   %s" % url)
     print("  logins       from source/Credentials.csv (synced each start)")
+    print("  condition    SMP state for %d turbines from source/KGH_SMP.csv (synced each start)" % n_smp)
     print("  break-glass  admin / %s" % (os.environ.get("ADMIN_PASSWORD") or "admin123"))
     print("  database     %s  (%s)" % (DB_PATH, "freshly seeded" if fresh else "existing, kept"))
     print("  contents     %d pending entries (%d added in-app), %d logged record edits"

@@ -13,16 +13,19 @@ import re
 SOURCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "source")
 ARCHIVE_DIR = os.path.join(SOURCE_DIR, "_archived")
 
-# Credentials.csv stays in source/ and is re-synced into the users table on every
-# start (live config). The rest were a one-time import — they live in
-# source/_archived/ and are read only to rebuild a completely empty database.
+# Files in source/ that are re-synced into the database on every start (live config /
+# periodically-refreshed external data):
+#   Credentials.csv  -> the users table
+#   KGH_SMP.csv      -> the condition-monitoring (SMP) columns on assets
 CRED_FILE = "Credentials.csv"
+SMP_FILE = "KGH_SMP.csv"
+# The one-time turbine/asset import — these live in source/_archived/ and are read
+# only to rebuild a completely empty database.
 DATA_FILES = {
     "kgh2025": "KGH_2025.csv",
     "retro": "25_KGH_Retro.csv",
     "hv": "HV.csv",
     "stats": "Stats.csv",
-    "smp": "KGH_SMP_Action_Tracker.csv",
     "equipment": "Equipment_info.csv",
     "components": "Kilgallioch_App_data.csv",
     "manplan": "Manplan.csv",
@@ -296,15 +299,19 @@ def _equipment(rows):
 
 
 def _smp(rows):
+    """source/KGH_SMP.csv: Turbine, Data date, State Gearbox, State Generator,
+    State Main Bearing, Observations. Re-synced into the assets table every start."""
     out = {}
     for row in rows[1:]:
         tag = norm_tag(_get(row, 0))
         if not tag:
             continue
         out[tag] = {
-            "data_date": parse_date(_get(row, 4)),
-            "gearbox": clean(_get(row, 5)), "generator": clean(_get(row, 6)),
-            "main_bearing": clean(_get(row, 7)), "observations": clean(_get(row, 14)),
+            "data_date": parse_date(_get(row, 1)),
+            "gearbox": _get(row, 2) or None,
+            "generator": _get(row, 3) or None,
+            "main_bearing": _get(row, 4) or None,
+            "observations": _get(row, 5) or None,
         }
     return out
 
@@ -423,6 +430,11 @@ def load_credentials():
     return _credentials(_rows(os.path.join(SOURCE_DIR, CRED_FILE)))
 
 
+def load_smp():
+    """source/KGH_SMP.csv -> condition-monitoring state per turbine. Re-synced every start."""
+    return _smp(_rows(os.path.join(SOURCE_DIR, SMP_FILE)))
+
+
 def load_data():
     """The one-time turbine / asset / history import from source/_archived/*.csv.
     Only called when the database is completely empty."""
@@ -439,7 +451,6 @@ def load_data():
         "retrofits": _retrofits(_data_rows("retro")),
         "components": _components(_data_rows("components")),
         "equipment": _equipment(_data_rows("equipment")),
-        "smp": _smp(_data_rows("smp")),
         "roster": roster,
         "history": _jobreq(_data_rows("jobreq")),
         "pendings": _pendings(_data_rows("pendings")),
@@ -447,7 +458,7 @@ def load_data():
 
 
 def load():  # full set — used by the sanity dump below
-    return {**load_data(), "credentials": load_credentials()}
+    return {**load_data(), "credentials": load_credentials(), "smp": load_smp()}
 
 
 if __name__ == "__main__":  # quick sanity dump

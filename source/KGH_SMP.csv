@@ -1,0 +1,171 @@
+Turbine,Data date,State Gearbox,State Generator,State Main Bearing,Observations
+A01,2026-05-21,Monitoring,Normal,Normal,"Check sensor 2 (sensor, cable, fixing, connectors).
+Sensor 2 data unreliable, check sensor mounting.  Reapply adhesive if necessary."
+A02,2026-05-21,Normal,Normal,Normal,
+A03,2026-05-21,Normal,Normal,Normal,
+A04,2026-05-14,No SMP data,No SMP data,No SMP data,"Generator bearing state to be followed up
+No data from sensor 8. Check its presence, connection and LED of the channel 8.
+Old data. Data should be resend to verify the current state of the machine"
+A05,2026-05-10,Monitoring,Normal,Normal,Drive train state to be followed up.
+A06,2026-05-18,Normal,Monitoring,Normal,Gearbox-generator alignment to be followed up.
+A07,2026-05-21,Normal,Normal,Normal,
+A08,2026-05-21,Normal,Monitoring,Normal,Generator bearing state to be followed up
+A09,2026-05-21,Normal,Normal,Normal,Check sensor 5 ground connection.
+A10,2026-05-21,Monitoring,Normal,Monitoring,Drive train state to be followed up.
+B11,2026-05-15,Action - Low,Normal,Normal,Gearbox LSS shaft possible gear looseness/keyway damage
+B12,2026-05-19,Normal,Normal,No SMP data,"Check sensor 2 (sensor, cable, fixing, connectors).
+Check sensor 5 (sensor, cable, fixing, connectors).
+Low reliability diagnosis.
+No data from sensor 1. Check its presence, connection and LED of the channel 1.
+No data from sensor 4. Check its presence, connection, and LED of channel 4."
+B13,2026-05-20,Monitoring,Normal,Monitoring,"Drive train state to be followed up.
+Mechanical pump state to be followed up"
+B14,2026-02-16,No SMP data,No SMP data,No SMP data,Old data. Data should be resend to verify the current state of the machine
+B15,2026-05-13,Normal,Normal,Normal,
+B16,2026-02-15,Normal,Normal,Normal,"Low reliability diagnosis for low speed components
+No data from sensor 2 . Check its presence, connection and LED of the channel 2."
+B17,2026-05-21,Normal,Normal,Normal,
+B18,2026-05-17,Normal,Normal,No SMP data,"Check sensor 4 fixing. Use Loctite 242  (ref.149773) in the screw between the metallic chock and the accelerometer.
+Check Sensor 5 fixing.
+Low reliability diagnosis.
+No data from sensor 1. Check its presence, connection and LED of the channel 1.
+No data from sensor 2 . Check its presence, connection and LED of the channel 2.
+Sensor 4 must be 100mv/g check it.
+Sensor 5 must be 100mv/g check it."
+C19,2026-05-15,Normal,Normal,Normal,
+C20,2026-05-19,Normal,Normal,Normal,
+C21,2026-05-21,Normal,Normal,Normal,"Sensor 2 data unreliable, check sensor mounting.  Reapply adhesive if necessary."
+C22,2026-05-21,Normal,Normal,Normal,Sensor 1 and 5 swapped.
+C23,2026-05-21,Normal,Normal,Normal,"Sensor 2 & 5 swapped.
+Sensor 3 must be 500mv/g, check it."
+C24,2026-05-21,Normal,Normal,Normal,
+C25,2026-05-21,Normal,Normal,Normal,
+C26,2026-05-21,Normal,Normal,Normal,
+D27,2026-05-16,Normal,Normal,Normal,
+D28,2026-05-19,Normal,Normal,Damaged,Main shaft rear bearing damaged.
+D29,2026-05-19,Monitoring,Monitoring,Normal,"Generator bearing state to be followed up
+No data from sensor 4. Check its presence, connection, and LED of channel 4.
+Gearbox PS1 stage sun pinion state to followed up"
+D30,2026-05-20,Normal,Normal,Normal,"Low reliability diagnosis.
+No data from sensor 2 . Check its presence, connection and LED of the channel 2.
+No data from sensor 4. Check its presence, connection, and LED of channel 4.
+Sensor 5 must be 100mv/g check it."
+D31,2026-05-17,Normal,Normal,Normal,"Check sensor 5 (sensor, cable, fixing, connectors).
+No data from sensor 6. Check its presence connection and LED of the channel 6."
+D32,2026-05-19,Normal,Normal,Normal,"No data from sensor 5. Check its presence, connection and LED of channel 5."
+D33,2026-05-19,Normal,Normal,Normal,
+D34,2026-05-21,Normal,Normal,Normal,
+D35,2026-05-21,Normal,Normal,Normal,
+D36,2026-05-19,Monitoring,Normal,No SMP data,"Gearbox HSS-GEN bearing state to be followed up.
+No data from sensor 1. Check its presence, connection and LED of the channel 1.
+No data from sensor 6. Check its presence connection and LED of the channel 6."
+E37,2026-05-21,Monitoring,Normal,Normal,Mechanical pump vibration to be followed.
+E38,2026-05-15,Monitoring,Normal,Normal,Gearbox state to be followed up.
+E39,2026-05-15,Action - Low,Normal,Normal,"Low speed shaft state to be followed up
+LSS keyway state to be followed up"
+E40,2026-05-19,Normal,Monitoring,No SMP data,"Check sensor 5 (sensor, cable, fixing, connectors).
+No data from sensor 1. Check its presence, connection and LED of the channel 1.
+Generator bearing state to be followed up"
+E41,2026-05-21,Normal,Normal,Normal,
+E42,2026-05-21,Normal,Normal,Normal,"No data from sensor 4. Check its presence, connection, and LED of channel 4."
+E43,2026-05-21,No SMP data,Normal,Normal,"No data from sensor 2 . Check its presence, connection and LED of the channel 2.
+No data from sensor 3. Check its presence, connection and LED of the channel 3.
+No data from sensor 4. Check its presence, connection, and LED of channel 4.
+No data from sensor 5. Check its presence, connection and LED of channel 5."
+E44,2026-05-19,Normal,Action - High,Normal,"No data from sensor 7. Check its presence, connection, and LED of channel 7.
+Generator DE bearing damaged."
+E45,2026-05-19,Normal,Normal,Normal,"Low reliability diagnosis.
+No data from sensor 2 . Check its presence, connection and LED of the channel 2.
+No data from sensor 4. Check its presence, connection, and LED of channel 4.
+Possible channels 2 and 4 damaged."
+E46,2026-05-11,Normal,Normal,Normal,
+F47,2026-05-21,No SMP data,No SMP data,No SMP data,"Gearbox HSS state to be followed up.
+No data from sensor 2 . Check its presence, connection and LED of the channel 2.
+No data from sensor 3. Check its presence, connection and LED of the channel 3.
+No data from sensor 6. Check its presence connection and LED of the channel 6."
+F48,2026-04-19,Normal,Normal,Normal,No data from sensor 6. Check its presence connection and LED of the channel 6.
+F49,2026-05-21,Action - Low,Normal,Normal,Gearbox ISS (LSS) bearings to be followed up.
+F50,2026-02-15,Normal,Normal,Normal,"Low reliability diagnosis.
+No data from sensor 3. Check its presence, connection and LED of the channel 3.
+Only two data points were available from the last couple of years. Please verify the SMP operation and configuration, and upload the data."
+F51,2026-05-15,Normal,Normal,Normal,"No data from sensor 5. Check its presence, connection and LED of channel 5."
+F52,2026-05-20,Normal,Normal,No SMP data,"Low reliability diagnosis.
+No data from sensor 1. Check its presence, connection and LED of the channel 1.
+No data from sensor 4. Check its presence, connection, and LED of channel 4."
+F53,2026-04-14,No SMP data,No SMP data,No SMP data,Old data. Data should be resend to verify the current state of the machine
+F54,2026-05-20,Normal,Normal,Normal,
+F55,2026-05-21,Normal,Normal,Normal,"Low reliability diagnosis.
+No data from sensor 4. Check its presence, connection, and LED of channel 4.
+No data from sensor 8. Check its presence, connection and LED of the channel 8."
+F56,2026-05-15,Monitoring,Normal,Normal,Gearbox state to be followed up.
+G57,2026-05-19,Action - Medium,Normal,Normal,Gearbox LSS shaft keyway looseness/ damage.
+G58,2026-05-15,Normal,Normal,Normal,
+G59,2026-05-21,No SMP data,Normal,Normal,"No data from sensor 3. Check its presence, connection and LED of the channel 3.
+No data from sensor 4. Check its presence, connection, and LED of channel 4.
+No data from sensor 5. Check its presence, connection and LED of channel 5."
+G60,2026-05-19,Monitoring,Normal,Normal,Gearbox state to be followed up.
+G61,2026-05-13,Normal,Normal,Normal,"Channel 3 damaged.
+Old data. Data should be resend to verify the current state of the machine
+Legacy mode data is updated till Nov 2025, please verify for communication and configuration.
+Latest assessment is only based on register mode data"
+G62,2026-05-18,Normal,Normal,Normal,Register mode firmware upgrade pending.
+G63,2026-05-21,Normal,Normal,Normal,
+G64,2026-04-30,Monitoring,Normal,Normal,"Mechanical pump vibration to be followed.
+Old data. Data should be resend to verify the current state of the machine"
+G65,2026-05-19,Normal,Normal,Normal,
+G66,2026-05-21,Normal,Normal,Monitoring,No data from sensor 6. Check its presence connection and LED of the channel 6.
+H67,2026-05-21,Monitoring,Normal,Normal,"Check sensor 8 fixing. Use Loctite 242  (ref.149773) in the screw between the metallic chock and the accelerometer.
+Gearbox state to be followed up.
+No data from sensor 2 . Check its presence, connection and LED of the channel 2."
+H68,2026-05-05,Normal,Monitoring,Normal,"check the lubrication of the generator bearings.
+Generator DE bearing state to be followed up.
+Legacy data has not been updating since 08/05/2025.
+Old data. Data should be resend to verify the current state of the machine"
+H69,2026-04-26,Normal,Normal,Normal,
+H70,2026-05-19,Normal,Normal,Normal,Register mode firmware upgrade pending.
+H71,2026-05-19,Monitoring,Normal,No SMP data,"Check sensor 1 (sensor, cable, fixing, connectors).
+Gearbox state to be followed up."
+H72,2026-05-19,Normal,Normal,Normal,
+H73,2026-05-18,Normal,Normal,Normal,
+H74,2026-05-19,Monitoring,Normal,Normal,"Gearbox LSS stage to be followed up
+No data from sensor 3. Check its presence, connection and LED of the channel 3.
+No data from sensor 6. Check its presence connection and LED of the channel 6."
+H75,2026-05-02,Monitoring,Normal,Normal,"Check sensor 6 (sensor, cable, fixing, connectors).
+Gearbox LSS stage to be followed up"
+H76,2026-05-21,Monitoring,Normal,Normal,"Check sensor 5 (sensor, cable, fixing, connectors).
+Gearbox state to be followed up.
+No data from sensor 2 . Check its presence, connection and LED of the channel 2."
+I77,2026-05-19,Action - Low,Normal,Normal,Gearbox LSS stage shaft possible keyway looseness
+I78,2026-05-15,Monitoring,Normal,Normal,"Gearbox state to be followed up.
+Low reliability diagnosis.
+No data from sensor 4. Check its presence, connection, and LED of channel 4.
+No data from sensor 5. Check its presence, connection and LED of channel 5.
+No data from sensor 8. Check its presence, connection and LED of the channel 8."
+I79,2070-01-02,Normal,Normal,Normal,"Check sensor 6 (sensor, cable, fixing, connectors).
+Possible channel 6 damaged.
+Old data. Data should be resend to verify the current state of the machine"
+I80,2026-05-19,Normal,Normal,Normal,Gearbox HSS state to be followed up.
+I81,2026-02-23,Normal,Normal,Normal,"Old data. Data should be resend to verify the current state of the machine
+Latest legacy data available till Nov 2025;"
+I82,2026-05-20,Normal,Normal,Normal,
+I83,2026-05-19,Normal,Normal,Normal,"No data from sensor 5. Check its presence, connection and LED of channel 5."
+I84,2026-05-19,Normal,Normal,Normal,"Legacy data has not been available since 02/18/2025.
+Analysis done based on the registered data"
+I85,2026-05-16,Normal,Normal,Normal,Check Sensor 5 fixing.
+I86,2026-05-21,Normal,Normal,Normal,
+J87,2026-05-19,Normal,Normal,Normal,
+J88,2026-05-19,Normal,Normal,Normal,"No data from sensor 7. Check its presence, connection, and LED of channel 7."
+J89,2026-05-18,Normal,Normal,Normal,"No data from sensor 3. Check its presence, connection and LED of the channel 3."
+J90,2026-05-20,Monitoring,Normal,Normal,"Gearbox planet state to be followed up
+Gearbox state to be followed up.
+No data from sensor 7. Check its presence, connection, and LED of channel 7."
+J91,2026-05-20,Normal,Monitoring,Normal,Generator bearing state to be followed up
+J92,2026-05-19,Normal,Normal,Normal,"No data from sensor 2 . Check its presence, connection and LED of the channel 2.
+No data from sensor 3. Check its presence, connection and LED of the channel 3.
+No data from sensor 5. Check its presence, connection and LED of channel 5."
+J93,2026-05-20,Normal,Normal,Normal,
+J94,2026-05-19,Normal,Normal,Normal,"No data from sensor 2 . Check its presence, connection and LED of the channel 2."
+J95,2026-05-15,Monitoring,Normal,Normal,"Check sensor 5 (sensor, cable, fixing, connectors).
+Gearbox state to be followed up."
+J96,2026-05-21,Action - Medium,Monitoring,Normal,"Generator bearing state to be followed up
+Gearbox LSS shaft keyway to be inspected"

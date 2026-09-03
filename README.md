@@ -147,7 +147,9 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
     entirely by the database;
     a **Next service due** card (the next incomplete service and its planned date — see the
     dashboard note above — with a days-away / overdue indicator); and a **Condition
-    monitoring (SMP)** box with gearbox / generator / main-bearing state and observations.
+    monitoring (SMP)** box with gearbox / generator / main-bearing state and observations,
+    re-synced from `source/KGH_SMP.csv` on every start (states: Normal / Monitoring /
+    Action&nbsp;-&nbsp;Low/Medium/High / Damaged / No&nbsp;SMP&nbsp;data).
   - *Service dates* — a **Service schedule** table (72 → 132 month) with two columns:
     **Planned** = the previous service's completion date plus the interval (derived — so
     entering a completion date advances the next service's planned date, e.g. 108-month
@@ -205,13 +207,19 @@ documents the column-by-column mapping. Dates in any of `YYYY-MM-DD`, `DD/MM/YYY
 | `25_KGH_Retro.csv` | retrofit status (complete / in progress / outstanding) |
 | `Kilgallioch_App_data.csv` | component serial numbers (blade-bearing columns are blank in the export) |
 | `Equipment_info.csv` | make / model / family / serial / dates |
-| `KGH_SMP_Action_Tracker.csv` | gearbox / generator / main-bearing state + observations |
 | `Manplan.csv` | the day-by-day technician availability roster |
 | `Job_Request.csv` | per-turbine work-order log |
 | `Pendings.csv` | open pending notifications per turbine |
 
-`source/Credentials.csv` (**not** archived) — login accounts: username, password,
-Admin / View / Tech; re-synced into `users` on every start.
+Two files in `source/` are **not** archived — they are re-synced into the database on every
+server start:
+
+- **`Credentials.csv`** — login accounts (username, password, Admin / View / Tech) → `users`.
+- **`KGH_SMP.csv`** — condition-monitoring state (`Turbine, Data date, State Gearbox, State
+  Generator, State Main Bearing, Observations`) → the `smp_*` columns on `assets`. The old
+  values are **discarded and replaced wholesale** each start; a turbine absent from the file
+  is left blank. Drop in a fresh monthly SMP export (converted to this column layout),
+  commit, redeploy. The original `KGH SMP May 26` export is the current source.
 
 ## Extending it later
 

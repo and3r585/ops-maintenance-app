@@ -12,8 +12,10 @@ They are kept here only for:
 - **disaster recovery** — if `data/app.db` is ever lost entirely, `python3 app.py`
   against an empty database re-imports from these files.
 
-`Credentials.csv` (in the parent `source/` folder) is **not** archived — it is live
-configuration, re-synced into the `users` table on every server start.
+`Credentials.csv` and `KGH_SMP.csv` (in the parent `source/` folder) are **not** archived —
+they are re-synced into the database on every server start (logins, and condition-monitoring
+state respectively). `KGH_SMP_Action_Tracker.csv` below is the *original* SMP import and is
+superseded by `source/KGH_SMP.csv`.
 
 | File | From | Fed |
 |---|---|---|

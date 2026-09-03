@@ -1110,8 +1110,11 @@ async function viewAsset(id) {
 
   function stateBadge(v) {
     const s = (v || "").trim();
-    const cls = /alarm/i.test(s) ? "danger" : /warn/i.test(s) ? "warn"
-      : /monitor/i.test(s) ? "info" : /normal/i.test(s) ? "ok" : "muted";
+    const cls = /damaged|alarm|action\s*-\s*high/i.test(s) ? "danger"
+      : /warn|action/i.test(s) ? "warn"           // Action - Low / Medium
+      : /monitor/i.test(s) ? "info"
+      : /normal/i.test(s) ? "ok"
+      : "muted";                                   // "No SMP data", blank
     return h("span", { class: "state-badge s-" + cls }, s || "—");
   }
 
@@ -1121,7 +1124,7 @@ async function viewAsset(id) {
       h("h3", {}, "Condition monitoring (SMP)"),
       h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
         anyState
-          ? "From the KGH SMP Action Tracker" + (a.smp_data_date ? ` · last data ${fmtDate(a.smp_data_date)}` : "")
+          ? "From the KGH SMP export" + (a.smp_data_date ? ` · last data ${fmtDate(a.smp_data_date)}` : "")
           : "No SMP data for this turbine."),
       anyState ? h("div", {},
         h("div", { class: "state-row" },
