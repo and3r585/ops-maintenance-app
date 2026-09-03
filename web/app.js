@@ -445,10 +445,10 @@ function viewHome() {
     tiles.append(
       h("button", { class: "tile", onclick: () => navigate("#/planning") },
         h("span", { class: "ico" }, "📅"),
-        h("h3", {}, "Planning"),
+        h("h3", {}, "Notification Request"),
         h("p", {}, isAdmin
-          ? "Build the day's team plan — drag available technicians and tasks into 10 team rows."
-          : "See the day's team plan — teams, tasks and technicians.")),
+          ? "Drag technicians into teams, add a turbine, contract type and description, then export the notification requests and file them to asset history."
+          : "See the day's notification requests — teams, turbines and descriptions.")),
       h("button", { class: "tile", onclick: () => navigate("#/explorer") },
         h("span", { class: "ico" }, "🗃️"),
         h("h3", {}, "Data Explorer"),
@@ -1262,7 +1262,8 @@ async function viewAsset(id) {
           h("div", { class: "wo-head" },
             h("span", { class: "wo-date" }, fmtDate(e.date)),
             e.work_type ? h("span", { class: "wo-type" }, e.work_type) : null,
-            e.service_order ? h("span", { class: "wo-so" }, "SO " + e.service_order) : null),
+            e.service_order ? h("span", { class: "wo-so" }, "SO " + e.service_order) : null,
+            e.source === "notification" ? h("span", { class: "wo-src" }, "Notification request") : null),
           h("div", { class: "wo-desc" }, esc(e.description)),
           e.technicians ? h("div", { class: "wo-techs" }, e.technicians) : null));
       }
@@ -1270,7 +1271,7 @@ async function viewAsset(id) {
     filter.addEventListener("change", draw);
     card.append(
       h("p", { class: "hint", style: "margin:-.2rem 0 .7rem" },
-        hist.length ? "From the Job Request “Scott & Stuart 2026” log." : ""),
+        hist.length ? "Imported work orders plus notification requests filed from the Notification Request screen." : ""),
       hist.length ? h("div", { class: "filter-row" }, filter) : null);
     card.append(list);
     if (!hist.length) card.append(h("div", { class: "empty-state" }, "No work order history for this turbine."));
@@ -1368,7 +1369,7 @@ const REASON_LABEL = {
   "ABS": "Absent", "TRG": "Training", "PAT": "Paternity", "JURY": "Jury service",
 };
 
-async function viewPlanning() {
+async function viewPlanning() {   /* Notification Request */
   const role = State.user.role;
   if (role !== "ADMIN" && role !== "VIEW") { navigate("#/home"); return; }
   const readOnly = role !== "ADMIN";
@@ -1376,10 +1377,18 @@ async function viewPlanning() {
   let plan;
   let planDate = new Date().toISOString().slice(0, 10);
 
-  async function load() { plan = await api("/plan?date=" + planDate); }
+  async function load() { plan = await api("/notif?date=" + planDate); }
   async function mutate(body) {
-    try { plan = await api("/plan", { method: "POST", body: { date: planDate, ...body } }); draw(); }
+    try { plan = await api("/notif", { method: "POST", body: { date: planDate, ...body } }); draw(); }
     catch (e) { toast(e.message, true); }
+  }
+  // field edits don't change the team layout — refresh state + footer only, so
+  // the inputs keep focus and don't flicker while you fill them in.
+  async function saveField(team_no, field, value) {
+    try {
+      plan = await api("/notif", { method: "POST", body: { date: planDate, op: "set_field", team_no, field, value } });
+      renderBar();
+    } catch (e) { toast(e.message, true); }
   }
   try { await load(); } catch (e) { return renderError(e); }
 
@@ -1390,9 +1399,9 @@ async function viewPlanning() {
   });
 
   const rail = h("div", { class: "plan-rail" });
-  const grid = h("div", { class: "team-table" });
+  const board = h("div", { class: "notif-board" });
 
-  /* ---- unified pointer drag (job chips + tech chips) ---- */
+  /* ---- pointer drag (tech chips only) ---- */
   let dragging = false;
   function startDrag(e, payload, el) {
     if (e.button != null && e.button !== 0) return;
@@ -1411,7 +1420,7 @@ async function viewPlanning() {
       const under = document.elementFromPoint(ev.clientX, ev.clientY);
       ghost.style.display = "";
       const z = under && under.closest("[data-accept]");
-      const ok = z && z.dataset.accept === payload.kind;
+      const ok = z && z.dataset.accept === payload.kind && z.dataset.full !== "1";
       if (z !== zone) {
         if (zone) zone.classList.remove("over", "reject");
         zone = z;
@@ -1426,14 +1435,12 @@ async function viewPlanning() {
       el.classList.remove("dragging");
       if (zone) {
         const accept = zone.dataset.accept, team = zone.dataset.team;
+        const full = zone.dataset.full === "1";
         zone.classList.remove("over", "reject");
-        if (accept === payload.kind) {
+        if (accept === payload.kind && !full) {
           if (team === "rail") {
-            if (payload.kind === "job" && payload.fromTeam) mutate({ op: "clear_job", team_no: +payload.fromTeam });
-            if (payload.kind === "tech" && payload.fromTeam) mutate({ op: "remove_member", team_no: +payload.fromTeam, user_id: payload.id });
-          } else if (payload.kind === "job") {
-            mutate({ op: "set_job", team_no: +team, job_id: payload.id });   // job_id = pending entry id
-          } else if (payload.kind === "tech") {
+            if (payload.fromTeam) mutate({ op: "remove_member", team_no: +payload.fromTeam, user_id: payload.id });
+          } else {
             mutate({ op: "add_member", team_no: +team, user_id: payload.id });
           }
         }
@@ -1444,81 +1451,160 @@ async function viewPlanning() {
     document.addEventListener("pointerup", up);
   }
 
-  function techChip(t, fromTeam) {
-    const off = t.available === false;
-    const chip = h("div", { class: "tech-chip" + (off ? " off" : "") + (fromTeam ? " placed" : "") },
+  function techChip(t, fromTeam, locked) {
+    const off = !!t.reason;
+    const dup = (plan.duplicates || []).some(d => d.id === t.id);
+    const chip = h("div", { class: "tech-chip" + (off ? " off" : "") + (fromTeam ? " placed" : "") + (dup ? " dup" : "") },
       h("span", { class: "tc-name" }, t.display_name),
-      fromTeam && !readOnly
+      (fromTeam && !readOnly && !locked)
         ? h("button", { class: "chip-x", title: "Remove", onclick: () => mutate({ op: "remove_member", team_no: +fromTeam, user_id: t.id }) }, "×")
         : (off ? h("span", { class: "chip-reason" }, REASON_LABEL[t.reason] || t.reason) : null));
-    if (!off && !readOnly) chip.addEventListener("pointerdown", (e) => startDrag(e, { kind: "tech", id: t.id, fromTeam }, chip));
+    if (!off && !readOnly && !locked) chip.addEventListener("pointerdown", (e) => startDrag(e, { kind: "tech", id: t.id, fromTeam }, chip));
     return chip;
   }
 
-  function jobChip(j, fromTeam) {
-    const card = h("div", { class: "task-chip" + (fromTeam ? " placed" : "") },
-      h("div", { class: "jt" }, j.title),
-      h("div", { class: "jm" },
-        j.priority != null ? h("span", { class: "pri-tag p" + j.priority }, "Priority " + j.priority) : null,
-        j.asset_tag ? h("span", {}, j.asset_tag) : null),
-      fromTeam && !readOnly ? h("button", { class: "chip-x", title: "Remove", onclick: () => mutate({ op: "clear_job", team_no: +fromTeam }) }, "×") : null);
-    if (!readOnly) card.addEventListener("pointerdown", (e) => startDrag(e, { kind: "job", id: j.id, fromTeam }, card));
+  function fieldSelect(team, field, blank, options, curVal) {
+    const sel = h("select", {},
+      h("option", { value: "" }, blank),
+      ...options.map(o => {
+        const val = typeof o === "object" ? String(o.value) : o;
+        const lbl = typeof o === "object" ? o.label : o;
+        const opt = h("option", { value: val }, lbl);
+        if (String(curVal ?? "") === val) opt.selected = true;
+        return opt;
+      }));
+    sel.disabled = readOnly || !!team.submitted_at;
+    sel.addEventListener("change", () => saveField(team.team_no, field, sel.value));
+    return sel;
+  }
+
+  function teamCard(team, isNew) {
+    const n = team.team_no;
+    const size = plan.team_size || 4;
+    const submitted = !!team.submitted_at;
+    const card = h("div", { class: "notif-team" + (submitted ? " submitted" : "") });
+
+    const head = h("div", { class: "notif-team-head" }, h("h3", {}, "Team " + n));
+    if (submitted) head.append(h("span", { class: "notif-filed" }, "✓ Filed to " + (team.asset_tag || "asset") + " history"));
+    else if (!readOnly && !isNew) head.append(
+      h("button", { class: "link-btn danger", onclick: () => { if (confirm("Remove Team " + n + "?")) mutate({ op: "clear_team", team_no: n }); } }, "Remove team"));
+    card.append(head);
+
+    const full = team.members.length >= size;
+    const memZone = h("div", { class: "notif-members dropzone2", "data-accept": submitted ? "" : "tech", "data-team": n, "data-full": (full || submitted) ? "1" : "0" });
+    team.members.forEach(m => memZone.append(techChip(m, n, submitted)));
+    if (!submitted && !readOnly && !full)
+      memZone.append(h("span", { class: "slot-hint" }, team.members.length ? "Drop another technician" : "Drop technicians here (up to " + size + ")"));
+    if (submitted && !team.members.length) memZone.append(h("span", { class: "slot-hint" }, "—"));
+    card.append(h("label", { class: "notif-lbl" }, "Technicians (" + team.members.length + "/" + size + ")"), memZone);
+
+    const turbSel = fieldSelect(team, "asset_id", "— select turbine —",
+      (plan.turbines || []).map(t => ({ value: t.id, label: t.tag })), team.asset_id);
+    const ctSel = fieldSelect(team, "contract_type", "— select contract type —",
+      plan.contract_types || [], team.contract_type);
+
+    const desc = h("textarea", { rows: "2", placeholder: "Notification description" }, team.description || "");
+    desc.disabled = readOnly || submitted;
+    desc.addEventListener("change", () => saveField(n, "description", desc.value));
+
+    const ats = h("input", { type: "text", placeholder: "ATS Case (optional)", value: team.ats_case || "" });
+    ats.disabled = readOnly || submitted;
+    ats.addEventListener("change", () => saveField(n, "ats_case", ats.value));
+
+    card.append(
+      h("div", { class: "notif-fields" },
+        h("label", { class: "notif-lbl" }, "Turbine", turbSel),
+        h("label", { class: "notif-lbl" }, "Contract type", ctSel),
+        h("label", { class: "notif-lbl wide" }, "Description", desc),
+        h("label", { class: "notif-lbl wide" }, "ATS Case", ats)));
     return card;
+  }
+
+  async function doExport(btn) {
+    await downloadFile("/notif/export?date=" + planDate, btn, "Notification requests exported",
+      "notification-requests-" + planDate + ".xlsx");
+  }
+  async function doSubmit(btn) {
+    if (!confirm("Submit " + plan.unsubmitted_complete + " completed team(s) to asset history and export the .xlsx? "
+      + "Filed entries can't be edited here afterwards.")) return;
+    btn.disabled = true;
+    try {
+      plan = await api("/notif", { method: "POST", body: { date: planDate, op: "submit" } });
+      draw();
+      toast("Filed to asset history");
+      await doExport(btn);
+    } catch (e) { toast(e.message, true); }
+    finally { btn.disabled = false; }
   }
 
   function draw() {
     dateInput.value = planDate;
+
+    /* rail */
     clear(rail);
     const availWrap = h("div", { class: "chip-wrap", "data-accept": "tech", "data-team": "rail" },
+      plan.available.length ? null : h("span", { class: "slot-hint" }, "All available technicians are on a team"),
       ...plan.available.map(t => techChip(t)));
     rail.append(
       h("label", { class: "rail-date" }, "Roster date", dateInput),
       h("h3", { class: "rail-head" },
-        `Available technicians (${plan.available.length})`
-        + (plan.assigned_count ? ` · ${plan.assigned_count} on teams` : "")),
+        "Available technicians (" + plan.available.length + ")"
+        + (plan.placed_count ? " · " + plan.placed_count + " on teams" : "")),
       availWrap);
-    if (plan.unavailable.length) {
-      rail.append(
-        h("h3", { class: "rail-head" }, `Unavailable (${plan.unavailable.length})`),
-        h("div", { class: "chip-wrap" }, ...plan.unavailable.map(t => techChip(t))));
-    }
-    const shown = plan.backlog.length;
-    const total = plan.backlog_total != null ? plan.backlog_total : shown;
-    rail.append(
-      h("h3", { class: "rail-head" }, `Tasks (${shown}${total > shown ? " of " + total : ""})`),
-      total > shown ? h("p", { class: "slot-hint", style: "margin:.1rem 0 .4rem" },
-        "Reviewed pending entries, highest priority first. Review more in Site Dashboard → pendings.") : null,
-      h("div", { class: "chip-wrap", "data-accept": "job", "data-team": "rail" },
-        shown ? null : h("span", { class: "slot-hint" }, "No reviewed pending entries to schedule"),
-        ...plan.backlog.map(j => jobChip(j))));
+    if (plan.unavailable.length) rail.append(
+      h("h3", { class: "rail-head" }, "Unavailable (" + plan.unavailable.length + ")"),
+      h("div", { class: "chip-wrap" }, ...plan.unavailable.map(t => techChip(t))));
 
-    clear(grid);
-    grid.append(h("div", { class: "team-row team-head" },
-      h("div", { class: "tcell tno" }, "Team"),
-      h("div", { class: "tcell ttask" }, "Task"),
-      h("div", { class: "tcell tmembers" }, "Technicians (min 2)")));
-    for (const team of plan.teams) {
-      const taskZone = h("div", { class: "tcell ttask dropzone2", "data-accept": "job", "data-team": team.team_no },
-        team.job ? jobChip(team.job, team.team_no)
-                 : h("span", { class: "slot-hint" }, readOnly ? "—" : "Drop a task"));
-      const memZone = h("div", { class: "tcell tmembers dropzone2", "data-accept": "tech", "data-team": team.team_no });
-      team.members.forEach(m => memZone.append(techChip(m, team.team_no)));
-      if (!readOnly) for (let i = team.members.length; i < 2; i++) memZone.append(h("span", { class: "slot-hint" }, "Drop a technician"));
-      if (readOnly && !team.members.length) memZone.append(h("span", { class: "slot-hint" }, "—"));
-      const needs = team.job && team.members.length < 2;
-      grid.append(h("div", { class: "team-row" + (needs ? " needs" : "") },
-        h("div", { class: "tcell tno" }, String(team.team_no),
-          needs ? h("span", { class: "needs-tag" }, "needs 2") : null),
-        taskZone, memZone));
+    /* board */
+    clear(board);
+    if (plan.duplicates && plan.duplicates.length) {
+      board.append(h("div", { class: "dup-warn" },
+        "⚠ On more than one team this date: "
+        + plan.duplicates.map(d => d.display_name + " (teams " + d.teams.join(", ") + ")").join("; ")));
     }
+    const teams = plan.teams.slice();
+    for (const t of teams) board.append(teamCard(t, false));
+
+    const last = teams[teams.length - 1];
+    const nextNo = (last ? last.team_no : 0) + 1;
+    const showNew = !readOnly && nextNo <= 30 && plan.available.length > 0
+      && (!last || last.members.length > 0);
+    if (showNew) {
+      board.append(teamCard({ team_no: nextNo, members: [], asset_id: null, contract_type: null,
+        description: "", ats_case: "", submitted_at: null }, true));
+    } else if (!teams.length) {
+      board.append(h("div", { class: "empty-state" },
+        readOnly ? "No notification requests for this date."
+                 : "Drag a technician from the left to start Team 1."));
+    }
+
+    renderBar();
+  }
+
+  function renderBar() {
+    const complete = plan.complete_count || 0;
+    const bar = h("div", { class: "notif-bar" },
+      h("span", {}, complete + " complete team(s)"
+        + (plan.unsubmitted_complete ? " · " + plan.unsubmitted_complete + " not yet filed" : "")));
+    if (!readOnly) {
+      const exportBtn = h("button", { class: "btn", disabled: complete ? null : "", onclick: () => doExport(exportBtn) }, "⭳ Export .xlsx");
+      const submitBtn = h("button", { class: "btn primary", disabled: plan.unsubmitted_complete ? null : "", onclick: () => doSubmit(submitBtn) }, "Submit to history & export");
+      bar.append(h("span", { class: "spacer" }), exportBtn, submitBtn);
+    } else if (complete) {
+      const exportBtn = h("button", { class: "btn", onclick: () => doExport(exportBtn) }, "⭳ Export .xlsx");
+      bar.append(h("span", { class: "spacer" }), exportBtn);
+    }
+    const existing = board.querySelector(".notif-bar");
+    if (existing) existing.replaceWith(bar); else board.append(bar);
   }
 
   root.replaceChildren(shell("planning",
-    h("div", { class: "page-head" }, h("h1", {}, "Planning"),
+    h("div", { class: "page-head" }, h("h1", {}, "Notification Request"),
       h("p", { class: "sub" }, readOnly
-        ? "Read-only view of the day's team plan. Pick a date to see that day's teams, tasks and technicians."
-        : "Pick the date, then drag available technicians and tasks from the left into the 10 team rows. Every task needs at least two technicians.")),
-    h("div", { class: "plan-layout" }, rail, h("div", { class: "team-wrap" }, grid))));
+        ? "Read-only view. Pick a roster date to see that day's notification-request teams."
+        : "Pick the roster date, drag technicians into teams of up to " + (plan.team_size || 4)
+          + ", add a turbine, contract type and description, then export and file to asset history.")),
+    h("div", { class: "plan-layout" }, rail, h("div", { class: "notif-wrap" }, board))));
   draw();
 }
 

@@ -225,17 +225,28 @@ CREATE TABLE IF NOT EXISTS record_changes (
 );
 CREATE INDEX IF NOT EXISTS ix_record_changes_at ON record_changes(changed_at);
 
--- Daily team plan: 10 team rows per date, each an (optional) pending entry + its technicians.
-CREATE TABLE IF NOT EXISTS plan_team (
-    plan_date  TEXT NOT NULL,
-    team_no    INTEGER NOT NULL,
-    pending_id INTEGER REFERENCES pending_entries(id),
-    PRIMARY KEY (plan_date, team_no)
+-- Notification Request: one row per team on a roster date. A team becomes a
+-- notification (turbine + contract type + description + optional ATS case) worked
+-- by up to 4 technicians. On submit it is written into that asset's history.
+CREATE TABLE IF NOT EXISTS notif_request (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_date     TEXT NOT NULL,
+    team_no       INTEGER NOT NULL,
+    asset_id      INTEGER REFERENCES assets(id),
+    contract_type TEXT,
+    description   TEXT,
+    ats_case      TEXT,
+    submitted_at  TEXT,
+    submitted_by  INTEGER REFERENCES users(id),
+    history_id    INTEGER,
+    created_at    TEXT NOT NULL,
+    UNIQUE (plan_date, team_no)
 );
-CREATE TABLE IF NOT EXISTS plan_member (
+CREATE TABLE IF NOT EXISTS notif_member (
     plan_date TEXT NOT NULL,
     team_no   INTEGER NOT NULL,
     user_id   INTEGER NOT NULL REFERENCES users(id),
+    slot      INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (plan_date, team_no, user_id)
 );
 
@@ -330,21 +341,16 @@ def seed():
     conn = get_db()
     conn.executescript(SCHEMA)
 
-    # --- migration: retire the early hard-coded `jobs` demo table.
-    #     The planning board now schedules real pending entries, so plan_team
-    #     references pending_entries instead of jobs. plan_team only holds
-    #     day-scoped scratch assignments, so it is safe to rebuild.
-    pt_cols = [r["name"] for r in conn.execute("PRAGMA table_info(plan_team)")]
-    if pt_cols and "pending_id" not in pt_cols:
-        conn.executescript(
-            "DROP TABLE IF EXISTS plan_team;"
-            "CREATE TABLE plan_team ("
-            "  plan_date  TEXT NOT NULL,"
-            "  team_no    INTEGER NOT NULL,"
-            "  pending_id INTEGER REFERENCES pending_entries(id),"
-            "  PRIMARY KEY (plan_date, team_no));"
-        )
-    conn.executescript("DROP TABLE IF EXISTS job_activity; DROP TABLE IF EXISTS jobs;")
+    # --- migration: retire early demo/scratch tables. The day-plan board (jobs,
+    #     plan_team, plan_member) is replaced by Notification Request; all three
+    #     only ever held transient scratch data. ---
+    conn.executescript(
+        "DROP TABLE IF EXISTS job_activity; DROP TABLE IF EXISTS jobs;"
+        "DROP TABLE IF EXISTS plan_team; DROP TABLE IF EXISTS plan_member;")
+
+    # --- migration: mark where an asset_history row came from ('import' | 'notification') ---
+    if "source" not in [r["name"] for r in conn.execute("PRAGMA table_info(asset_history)")]:
+        conn.execute("ALTER TABLE asset_history ADD COLUMN source TEXT")
 
     # --- migration: widen the users.role CHECK to allow the read-only 'VIEW' role ---
     udef = conn.execute(
@@ -399,7 +405,7 @@ def seed():
     for key, name, min_role, sort in [
         ("dashboard", "Site Dashboard", "TECHNICIAN", 5),
         ("assets", "Asset Information", "TECHNICIAN", 10),
-        ("planning", "Planning", "ADMIN", 20),
+        ("planning", "Notification Request", "ADMIN", 20),
         ("explorer", "Data Explorer", "ADMIN", 30),
     ]:
         if conn.execute("SELECT 1 FROM modules WHERE key = ?", (key,)).fetchone():
@@ -974,60 +980,95 @@ class Handler(BaseHTTPRequestHandler):
                 counts[r["status"]] = r["c"]
             return 200, {"pendings": rows, "counts": counts}
 
-        # --- daily team plan ---
-        if parts == ["plan"] and method == "GET":
+        # --- Notification Request ---
+        if parts == ["notif"] and method == "GET":
             self._require(conn, ("ADMIN", "VIEW"))
             date = (query.get("date", [today()])[0] or today()).strip()
-            return 200, load_plan(conn, date)
+            return 200, load_notif(conn, date)
 
-        if parts == ["plan"] and method == "POST":
-            self._require(conn, "ADMIN")
+        if parts == ["notif"] and method == "POST":
+            user = self._require(conn, "ADMIN")
             data = self._json_body()
             date = (data.get("date") or today()).strip()
-            team_no = int(data.get("team_no") or 0)
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+                raise ApiError(400, "A roster date is required")
             op = data.get("op")
-            if not (1 <= team_no <= 10):
-                raise ApiError(400, "team_no must be 1-10")
-            conn.execute(
-                "INSERT OR IGNORE INTO plan_team (plan_date, team_no, pending_id) VALUES (?,?,NULL)",
-                (date, team_no),
-            )
-            if op == "set_job":
-                pending_id = data.get("job_id")
-                task = conn.execute(
-                    "SELECT id, status FROM pending_entries WHERE id = ?", (pending_id,)
+
+            if op == "submit":
+                _notif_submit(conn, date, user["id"])
+                return 200, load_notif(conn, date)
+
+            team_no = int(data.get("team_no") or 0)
+            if not (1 <= team_no <= NOTIF_MAX_TEAMS):
+                raise ApiError(400, "team_no must be 1-%d" % NOTIF_MAX_TEAMS)
+            row = conn.execute(
+                "SELECT * FROM notif_request WHERE plan_date=? AND team_no=?", (date, team_no)
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO notif_request (plan_date, team_no, created_at) VALUES (?,?,?)",
+                    (date, team_no, now()))
+                row = conn.execute(
+                    "SELECT * FROM notif_request WHERE plan_date=? AND team_no=?", (date, team_no)
                 ).fetchone()
-                if not task:
-                    raise ApiError(404, "Pending entry not found")
-                if task["status"] == "COMPLETED":
-                    raise ApiError(409, "That pending entry is already completed")
-                # a pending sits on at most one team per date
-                conn.execute("UPDATE plan_team SET pending_id = NULL WHERE plan_date = ? AND pending_id = ?",
-                             (date, pending_id))
-                conn.execute("UPDATE plan_team SET pending_id = ? WHERE plan_date = ? AND team_no = ?",
-                             (pending_id, date, team_no))
-            elif op == "clear_job":
-                conn.execute("UPDATE plan_team SET pending_id = NULL WHERE plan_date = ? AND team_no = ?",
-                             (date, team_no))
-            elif op == "add_member":
+            if row["submitted_at"]:
+                raise ApiError(409, "Team %d has already been submitted to history" % team_no)
+
+            if op == "add_member":
                 uid = data.get("user_id")
-                u = conn.execute("SELECT * FROM users WHERE id = ? AND role = 'TECHNICIAN'", (uid,)).fetchone()
+                u = conn.execute(
+                    "SELECT * FROM users WHERE id=? AND role='TECHNICIAN' AND active=1", (uid,)
+                ).fetchone()
                 if not u:
                     raise ApiError(404, "Technician not found")
-                off = conn.execute("SELECT code FROM roster WHERE user_id = ? AND on_date = ?",
+                off = conn.execute("SELECT code FROM roster WHERE user_id=? AND on_date=?",
                                    (uid, date)).fetchone()
                 if off:
                     raise ApiError(409, "%s is unavailable (%s)" % (u["display_name"], off["code"]))
-                # a technician belongs to at most one team per day
-                conn.execute("DELETE FROM plan_member WHERE plan_date = ? AND user_id = ?", (date, uid))
-                conn.execute("INSERT INTO plan_member (plan_date, team_no, user_id) VALUES (?,?,?)",
-                             (date, team_no, uid))
+                n = conn.execute("SELECT COUNT(*) c FROM notif_member WHERE plan_date=? AND team_no=?",
+                                 (date, team_no)).fetchone()["c"]
+                if n >= NOTIF_TEAM_SIZE:
+                    raise ApiError(409, "A team can hold at most %d technicians" % NOTIF_TEAM_SIZE)
+                conn.execute(
+                    "INSERT OR IGNORE INTO notif_member (plan_date, team_no, user_id, slot) VALUES (?,?,?,?)",
+                    (date, team_no, uid, n))
             elif op == "remove_member":
-                conn.execute("DELETE FROM plan_member WHERE plan_date = ? AND team_no = ? AND user_id = ?",
+                conn.execute("DELETE FROM notif_member WHERE plan_date=? AND team_no=? AND user_id=?",
                              (date, team_no, data.get("user_id")))
+            elif op == "set_field":
+                field = data.get("field")
+                if field not in ("asset_id", "contract_type", "description", "ats_case"):
+                    raise ApiError(400, "Unknown field")
+                val = data.get("value")
+                if field == "asset_id":
+                    val = int(val) if val else None
+                    if val and not conn.execute("SELECT 1 FROM assets WHERE id=?", (val,)).fetchone():
+                        raise ApiError(404, "Turbine not found")
+                elif field == "contract_type":
+                    val = (val or "").strip() or None
+                    if val and val not in CONTRACT_TYPES:
+                        raise ApiError(400, "Unknown contract type")
+                else:
+                    val = (val or "").strip() or None
+                conn.execute("UPDATE notif_request SET %s=? WHERE plan_date=? AND team_no=?" % field,
+                             (val, date, team_no))
+            elif op == "clear_team":
+                conn.execute("DELETE FROM notif_member WHERE plan_date=? AND team_no=?", (date, team_no))
+                conn.execute("DELETE FROM notif_request WHERE plan_date=? AND team_no=?", (date, team_no))
             else:
                 raise ApiError(400, "Unknown op")
-            return 200, load_plan(conn, date)
+            return 200, load_notif(conn, date)
+
+        if parts == ["notif", "export"] and method == "GET":
+            self._require(conn, ("ADMIN", "VIEW"))
+            date = (query.get("date", [today()])[0] or today()).strip()
+            rows = _notif_export_rows(conn, date)
+            if len(rows) < 2:
+                raise ApiError(404, "No complete notification requests for %s" % date)
+            return 200, RawResponse(
+                build_xlsx([("Notification Requests", rows)]),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "notification-requests-%s.xlsx" % date)
 
         # --- assets ---
         if parts == ["assets"] and method == "GET":
@@ -1049,7 +1090,7 @@ class Handler(BaseHTTPRequestHandler):
                 "WHERE asset_id = ? ORDER BY sort, name", (parts[1],),
             ).fetchall()
             history = conn.execute(
-                "SELECT occurred_on AS date, description, work_type, service_order, technicians "
+                "SELECT occurred_on AS date, description, work_type, service_order, technicians, source "
                 "FROM asset_history WHERE asset_id = ? "
                 "ORDER BY occurred_on DESC, id DESC", (parts[1],),
             ).fetchall()
@@ -1515,75 +1556,168 @@ def public_user(row):
             "display_name": row["display_name"], "role": row["role"]}
 
 
-def load_plan(conn, date):
-    """Return the 10-team day plan plus roster + backlog for `date`."""
+# Notification Request ---------------------------------------------------------
+
+NOTIF_TEAM_SIZE = 4          # technicians per team
+NOTIF_MAX_TEAMS = 30
+NOTIF_HUB = "SO5"           # matches the "Scott & Stuart" export ("SO5", letter O)
+NOTIF_SITE = "Kilgallioch"
+
+# Contract-type dropdown — mirrored from the "Lookups" sheet of the notification
+# request workbook (column "Contract Type").
+CONTRACT_TYPES = [
+    "MINOR CORRECTIVE", "MAJOR CORRECTIVE", "SERVICE", "RETROFIT",
+    "HV INSPECTIONS", "STAT INSPECTIONS", "OIL CHANGE", "HOSE CHANGE",
+    "BLADE REPAIRS/INSPECTIONS", "INVERTER/DELTA EXCHANGES",
+    "BILLABLE MINOR CORRECTIVE", "BILLABLE MAJOR CORRECTIVE", "BILLABLE RETROFIT",
+    "BILLABLE ESCORTING", "WARRANTY MINOR CORRECTIVE", "WARRANTY MAJOR CORRECTIVE",
+    "WARRANTY RETROFIT", "STORES - SERVICE", "STORES - CORRECTIVE",
+    "SUPERVISOR DUTIES", "VEHICLE CHECK", "WEATHER/STAND DOWN", "GENERAL ADMIN",
+]
+
+# .xlsx column headers — must match the target sheet exactly for copy/paste.
+NOTIF_XLSX_HEADER = [
+    "DATE", "Hub", "SITE ", "TURBINE NO.", "FUNCTIONAL LOCATION", "FLOC & EQUIPMENT",
+    "CONTRACT TYPE", "WBS ELEMENT (NSM)\nOr SALES DOC & LINE", "NOTIFICATION DESCRIPTION",
+    "ATS Case", "SGRE NOTIFICATION NUMBER", "SGRE SERVICE ORDER NUMBER",
+    "TECHNICIAN (LOCAL)", "TECHNICIAN (LOCAL)", "TECHNICIAN (LOCAL)",
+    "TECHNICIAN (LOCAL)", "TECHNICIAN (LOCAL)", "TECHNICIAN (LOCAL)",
+]
+
+
+def _notif_teams(conn, date):
+    """[{team_no, request_id, asset_id, asset_tag, contract_type, description,
+        ats_case, submitted_at, members:[{id, display_name}]}], team order."""
+    reqs = conn.execute(
+        "SELECT r.*, a.tag AS asset_tag FROM notif_request r "
+        "LEFT JOIN assets a ON a.id = r.asset_id "
+        "WHERE r.plan_date = ? ORDER BY r.team_no", (date,)).fetchall()
+    mem = conn.execute(
+        "SELECT m.team_no, u.id, u.display_name FROM notif_member m "
+        "JOIN users u ON u.id = m.user_id WHERE m.plan_date = ? ORDER BY m.slot, u.display_name",
+        (date,)).fetchall()
+    by_team = {}
+    for m in mem:
+        by_team.setdefault(m["team_no"], []).append(
+            {"id": m["id"], "display_name": m["display_name"]})
+    out = []
+    for r in reqs:
+        out.append({
+            "team_no": r["team_no"], "request_id": r["id"],
+            "asset_id": r["asset_id"], "asset_tag": r["asset_tag"],
+            "contract_type": r["contract_type"], "description": r["description"],
+            "ats_case": r["ats_case"], "submitted_at": r["submitted_at"],
+            "members": by_team.get(r["team_no"], []),
+        })
+    return out
+
+
+def _team_complete(t):
+    return bool(t["asset_id"] and t["contract_type"]
+               and (t["description"] or "").strip() and t["members"])
+
+
+def load_notif(conn, date):
+    """Everything the Notification Request screen needs for one roster date."""
     tech_rows = conn.execute(
         "SELECT u.id, u.display_name, r.code AS reason "
         "FROM users u LEFT JOIN roster r ON r.user_id = u.id AND r.on_date = ? "
-        "WHERE u.role = 'TECHNICIAN' AND u.active = 1 ORDER BY u.display_name",
-        (date,),
-    ).fetchall()
-    techs = [{"id": r["id"], "display_name": r["display_name"],
-              "reason": r["reason"], "available": r["reason"] is None} for r in tech_rows]
+        "WHERE u.role = 'TECHNICIAN' AND u.active = 1 ORDER BY u.display_name", (date,)).fetchall()
 
-    members = conn.execute(
-        "SELECT m.team_no, u.id, u.display_name FROM plan_member m "
-        "JOIN users u ON u.id = m.user_id WHERE m.plan_date = ? ORDER BY u.display_name",
-        (date,),
-    ).fetchall()
-    by_team = {}
-    for m in members:
-        by_team.setdefault(m["team_no"], []).append({"id": m["id"], "display_name": m["display_name"]})
+    teams = _notif_teams(conn, date)
 
-    def task(row):
-        note = (row["note"] or "").strip().replace("\r\n", "\n")
-        title = note.split("\n", 1)[0]
-        if len(title) > 90:
-            title = title[:88].rstrip() + "…"
-        return {"id": row["id"], "title": title or "(no description)",
-                "asset_tag": row["asset_tag"], "priority": row["priority"],
-                "status": row["status"]}
+    # a technician is "placed" once they sit on any team that date
+    placed_teams = {}
+    for t in teams:
+        for m in t["members"]:
+            placed_teams.setdefault(m["id"], []).append(t["team_no"])
+    duplicates = [
+        {"id": uid, "display_name": next(x["display_name"] for tt in teams
+                                          for x in tt["members"] if x["id"] == uid),
+         "teams": tns}
+        for uid, tns in placed_teams.items() if len(tns) > 1
+    ]
 
-    placed = conn.execute(
-        "SELECT t.team_no, p.id, p.note, p.priority, p.status, a.tag AS asset_tag "
-        "FROM plan_team t JOIN pending_entries p ON p.id = t.pending_id "
-        "JOIN assets a ON a.id = p.asset_id WHERE t.plan_date = ?",
-        (date,),
-    ).fetchall()
-    task_by_team = {p["team_no"]: task(p) for p in placed}
-    placed_ids = {p["id"] for p in placed}
+    available, unavailable = [], []
+    for r in tech_rows:
+        row = {"id": r["id"], "display_name": r["display_name"], "reason": r["reason"]}
+        if r["reason"]:
+            unavailable.append(row)
+        elif r["id"] not in placed_teams:
+            available.append(row)
 
-    teams = []
-    for n in range(1, 11):
-        teams.append({
-            "team_no": n,
-            "job": task_by_team.get(n),
-            "members": by_team.get(n, []),
-        })
-
-    # backlog = open pending entries an admin has reviewed (triaged, ready to schedule),
-    # highest priority first, capped so the rail stays usable.
-    rows = conn.execute(
-        "SELECT p.id, p.note, p.priority, p.status, a.tag AS asset_tag "
-        "FROM pending_entries p JOIN assets a ON a.id = p.asset_id "
-        "WHERE p.status = 'REVIEWED' "
-        "ORDER BY p.priority IS NULL, p.priority, p.created_at LIMIT 60"
-    ).fetchall()
-    backlog = [task(r) for r in rows if r["id"] not in placed_ids]
-    open_reviewed = conn.execute(
-        "SELECT COUNT(*) c FROM pending_entries WHERE status = 'REVIEWED'"
-    ).fetchone()["c"]
-
-    assigned_ids = {m["id"] for m in members}
     return {
         "date": date,
+        "hub": NOTIF_HUB,
+        "site": NOTIF_SITE,
+        "team_size": NOTIF_TEAM_SIZE,
         "teams": teams,
-        "backlog": backlog,
-        "backlog_total": open_reviewed,
-        "available": [t for t in techs if t["available"] and t["id"] not in assigned_ids],
-        "unavailable": [t for t in techs if not t["available"]],
-        "assigned_count": len(assigned_ids),
+        "available": available,
+        "unavailable": unavailable,
+        "placed_count": len(placed_teams),
+        "duplicates": duplicates,
+        "turbines": [dict(r) for r in conn.execute(
+            "SELECT id, tag FROM assets ORDER BY tag")],
+        "contract_types": CONTRACT_TYPES,
+        "complete_count": sum(1 for t in teams if _team_complete(t)),
+        "unsubmitted_complete": sum(1 for t in teams
+                                    if _team_complete(t) and not t["submitted_at"]),
     }
+
+
+def _notif_export_rows(conn, date):
+    """Header + one row per complete team, laid out like the target sheet."""
+    rows = [NOTIF_XLSX_HEADER]
+    d = date
+    try:
+        d = "%s/%s/%s" % (date[8:10], date[5:7], date[0:4])   # DD/MM/YYYY
+    except Exception:
+        pass
+    for t in _notif_teams(conn, date):
+        if not _team_complete(t):
+            continue
+        names = [m["display_name"] for m in t["members"]][:NOTIF_TEAM_SIZE]
+        names += [""] * (6 - len(names))
+        rows.append([
+            d, NOTIF_HUB, NOTIF_SITE,
+            "%s %s" % (t["asset_tag"], NOTIF_SITE),   # e.g. "B18 Kilgallioch"
+            "", "", t["contract_type"], "",
+            (t["description"] or "").strip(), (t["ats_case"] or "").strip(),
+            "", "", *names,
+        ])
+    return rows
+
+
+def _notif_submit(conn, date, user_id):
+    """Write every complete, not-yet-submitted team into its asset's history."""
+    teams = _notif_teams(conn, date)
+    have = [t for t in teams if t["members"] or t["asset_id"] or t["contract_type"]
+            or (t["description"] or "").strip() or (t["ats_case"] or "").strip()]
+    if not have:
+        raise ApiError(400, "Nothing to submit — add at least one team")
+    bad = [t["team_no"] for t in have if not _team_complete(t) and not t["submitted_at"]]
+    if bad:
+        raise ApiError(400, "Team %s: needs a turbine, contract type, description and "
+                       "at least one technician before it can be submitted"
+                       % ", ".join(map(str, bad)))
+    n = 0
+    for t in teams:
+        if not _team_complete(t) or t["submitted_at"]:
+            continue
+        techs = ", ".join(m["display_name"] for m in t["members"])
+        desc = (t["description"] or "").strip()
+        if (t["ats_case"] or "").strip():
+            desc += "  (ATS Case: %s)" % t["ats_case"].strip()
+        cur = conn.execute(
+            "INSERT INTO asset_history (asset_id, occurred_on, description, work_type, "
+            "service_order, technicians, source) VALUES (?,?,?,?,?,?,'notification')",
+            (t["asset_id"], date, desc, t["contract_type"], None, techs))
+        conn.execute(
+            "UPDATE notif_request SET submitted_at=?, submitted_by=?, history_id=? "
+            "WHERE plan_date=? AND team_no=?",
+            (now(), user_id, cur.lastrowid, date, t["team_no"]))
+        n += 1
+    return n
 
 
 def _service_month(name):
@@ -1676,7 +1810,7 @@ def _guard_reset(force):
     try:
         c = get_db()
         n = sum(c.execute("SELECT COUNT(*) c FROM " + t).fetchone()["c"]
-                for t in ("pending_photos", "record_changes", "plan_team"))
+                for t in ("pending_photos", "record_changes", "notif_request"))
         n += c.execute("SELECT COUNT(*) c FROM pending_entries WHERE wo_code IS NULL").fetchone()["c"]
         c.close()
     except sqlite3.Error:

@@ -80,21 +80,21 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
 | Role | Sees | Can change |
 |------|------|-----------|
 | **Technician** | Site Dashboard, Asset Information | **only** add a pending entry, or complete a reviewed one (mandatory comment + photo) |
-| **View** | everything an Admin sees — Site Dashboard, Asset Information, Planning, Data Explorer | **nothing** — every page is read-only; CSV / change-report exports still work |
-| **Admin** | everything | everything — service/HV/retrofit/blade dates, pending review + parts, planning, bulk edits |
+| **View** | everything an Admin sees — Site Dashboard, Asset Information, Notification Request, Data Explorer | **nothing** — every page is read-only; CSV / change-report exports still work |
+| **Admin** | everything | everything — service/HV/retrofit/blade dates, pending review + parts, notification requests, bulk edits |
 
 ## What's built
 
 - **Login page** — username + password gate on the whole app.
 - **Role landing** — technicians get "Site dashboard" + "View asset information"; admins
-  additionally get "Planning" and "Data Explorer".
+  additionally get "Notification Request" and "Data Explorer".
 - **Asset register** — 96 turbines seeded from the *TURBINE* column of the *KGH 2025* tab
   of the KGH Virtual Whiteboard workbook, grouped by array (A–J). Searchable/filterable,
   with an open-pendings badge per turbine. No operational-status field on assets.
 - **Technicians / roster** — the day-by-day availability grid comes from column E, rows
   14–37 of the *Manplan 2025* tab; a roster row attaches to a login account when the
-  Manplan-derived username matches a `Credentials.csv` username. The planning-board team
-  members are the **active technician accounts** from `Credentials.csv`.
+  Manplan-derived username matches a `Credentials.csv` username. The Notification Request
+  team members are the **active technician accounts** from `Credentials.csv`.
 - **Site dashboard** — open pending-entry count (by status), each turbine's next incomplete
   service (soonest first), and every retrofit campaign still outstanding / in progress.
   Visible to everyone. Its three drill-downs — **`#/pendings`**, **`#/services`**,
@@ -122,17 +122,19 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
     Components) listing every record whose completion date falls in that window — whether
     the date was imported from the spreadsheets or entered in the app — plus a Pendings
     sheet for entries reviewed/completed in the window.
-- **Planning board (admin)** — pick a date; the left rail shows **available technicians** as
-  draggable chips (unavailable ones greyed with their reason, from the *Manplan 2025* day
-  grid — unavailable = `HOL in WD` / `MED` / `SICK` / `ABS` / `TRG` / `PAT` / `JURY`, blank
-  or anything else = available) and the **task backlog**. Tasks are **real pending entries**
-  an admin has moved to *Reviewed* (highest priority first, capped at 60 in the rail — the
-  header shows `shown of total`). Drag chips and tasks into a **10-row team table**; each
-  team row holds one task and its technicians, with two placeholder slots and a "needs 2"
-  flag until at least two technicians are dropped in. Dragging a chip/task back to the rail
-  (or its × button) frees it. The plan is saved per date; an unavailable technician is
-  refused. Scheduling a pending onto a team does not change its Submitted→Reviewed→Completed
-  status — that workflow is unchanged.
+- **Notification Request (admin)** — pick a **roster date**; the left rail shows **available
+  technicians** as draggable chips (unavailable ones greyed with their reason, from the
+  *Manplan 2025* day grid — unavailable = `HOL in WD` / `MED` / `SICK` / `ABS` / `TRG` /
+  `PAT` / `JURY`, blank or anything else = available). Drag technicians into **teams of up
+  to 4**; give each team a **turbine**, a **contract type** (dropdown mirrored from the
+  notification-request workbook), a **description** and an optional **ATS Case**. A fresh
+  empty team appears once the previous one has a technician, and stops when no available
+  technicians remain. A technician placed on more than one team that date raises a
+  duplicate **warning** (not a block). **Export .xlsx** downloads the requests laid out for
+  copy/paste into the target sheet (Hub `SO5`, Site `Kilgallioch`, turbine as
+  `<tag> Kilgallioch`, six technician columns). **Submit to history & export** additionally
+  files every complete team into that turbine's **History** tab (tagged *Notification
+  request*) and locks it.
 - **Asset detail** — tabs for **Details**, **Service dates**, **HV history**, **Stat history**,
   **Retrofits**, **Blades**, **Components**, **History** and **Pendings**, with **‹ ›**
   previous/next-turbine buttons in the header that step through the register alphabetically
@@ -237,7 +239,7 @@ source/_archived/*.csv   the one-time import — read only to rebuild an empty D
 render.yaml          Render deploy blueprint
 requirements.txt     Pillow
 web/index.html       SPA shell
-web/app.js           views, router, planning board
+web/app.js           views, router, notification request
 web/styles.css       Claude-inspired theme (light + dark, follows OS, manual toggle ◐)
 data/                created at runtime — SQLite db + uploaded photos (+ _thumb.jpg)
 ```
