@@ -1011,6 +1011,28 @@ class Handler(BaseHTTPRequestHandler):
                 "next_service": next_service(services, asset["install_date"]),
             }
 
+        # admin edits the free-text defect / operational-issue note on an asset
+        if len(parts) == 2 and parts[0] == "assets" and method == "PATCH":
+            user = self._require(conn, "ADMIN")
+            asset = conn.execute("SELECT id, tag, defect FROM assets WHERE id = ?",
+                                 (parts[1],)).fetchone()
+            if not asset:
+                raise ApiError(404, "Asset not found")
+            data = self._json_body()
+            if "defect" not in data:
+                raise ApiError(400, "Nothing to update")
+            new = (data.get("defect") or "").strip() or None
+            old = asset["defect"]
+            if (old or None) != (new or None):
+                conn.execute("UPDATE assets SET defect = ? WHERE id = ?", (new, asset["id"]))
+                conn.execute(
+                    "INSERT INTO record_changes "
+                    "(record_id, asset_id, category, record_name, field, old_value, new_value, "
+                    "changed_by, changed_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (asset["id"], asset["id"], "defect", "Defect / operational issue",
+                     "detail", old, new, user["id"], now()))
+            return 200, {"ok": True, "defect": new}
+
         # set / clear a service, blade, hv or retrofit record date (admin only)
         if len(parts) == 2 and parts[0] == "records" and method == "PATCH":
             user = self._require(conn, "ADMIN")
@@ -1261,6 +1283,8 @@ class Handler(BaseHTTPRequestHandler):
                     applied += 1
             return 200, {"applied": applied, "errors": errors}
 
+        # completions report: every asset_record completed in the window, one sheet
+        # per asset tab, regardless of whether the date was imported or set in the app.
         if parts == ["explorer", "changes"] and method == "GET":
             self._require(conn, ("ADMIN", "VIEW"))
             frm = (query.get("from", [""])[0] or "").strip()
@@ -1270,56 +1294,49 @@ class Handler(BaseHTTPRequestHandler):
                     raise ApiError(400, "from and to dates are required (YYYY-MM-DD)")
             if frm > to:
                 frm, to = to, frm
-            FIELD_LABEL = {"occurred_on": "Date", "detail": "Detail", "status": "Status"}
-            crows = conn.execute(
-                "SELECT c.*, a.tag, u.display_name AS by_name FROM record_changes c "
-                "JOIN assets a ON a.id = c.asset_id "
-                "LEFT JOIN users u ON u.id = c.changed_by "
-                "WHERE substr(c.changed_at,1,10) BETWEEN ? AND ? "
-                "ORDER BY c.category, a.tag, c.changed_at", (frm, to)).fetchall()
-            by_cat = {}
-            for r in crows:
-                by_cat.setdefault(r["category"], []).append(r)
+
             sheets = []
+            total = 0
             for key, label, _vf in EXPLORER_CATEGORIES:
-                rs = by_cat.get(key)
-                if not rs:
-                    continue
-                data = [["Turbine", "Record", "Field", "Previous value",
-                         "New value", "Changed by", "Changed at (UTC)"]]
-                for r in rs:
-                    data.append([
-                        r["tag"], r["record_name"],
-                        FIELD_LABEL.get(r["field"], r["field"]),
-                        r["old_value"] or "", r["new_value"] or "",
-                        r["by_name"] or "",
-                        (r["changed_at"] or "").replace("T", " ").rstrip("Z"),
-                    ])
-                sheets.append((label, data))
+                rows = conn.execute(
+                    "SELECT a.tag, r.name, r.occurred_on, r.status FROM asset_records r "
+                    "JOIN assets a ON a.id = r.asset_id "
+                    "WHERE r.category = ? AND r.occurred_on IS NOT NULL "
+                    "AND r.occurred_on BETWEEN ? AND ? "
+                    "ORDER BY r.occurred_on, a.tag, r.name", (key, frm, to)).fetchall()
+                head = ["Turbine", "Record", "Completed"] + (["Status"] if key == "retrofit" else [])
+                data = [head]
+                for r in rows:
+                    line = [r["tag"], r["name"], r["occurred_on"]]
+                    if key == "retrofit":
+                        line.append(r["status"] or "")
+                    data.append(line)
+                total += len(rows)
+                sheets.append((label, data))          # one tab per type, even if empty
+
             prows = conn.execute(
-                "SELECT a.tag, p.priority, p.status, p.note, p.created_at, "
-                "p.parts_reserved_at, p.completed_at, cu.display_name AS completed_by_name "
+                "SELECT a.tag, p.priority, p.status, p.parts_reserved_at, p.completed_at, "
+                "cu.display_name AS completed_by_name, p.note "
                 "FROM pending_entries p JOIN assets a ON a.id = p.asset_id "
                 "LEFT JOIN users cu ON cu.id = p.completed_by "
-                "WHERE substr(p.created_at,1,10) BETWEEN ? AND ? "
+                "WHERE substr(COALESCE(p.completed_at,''),1,10) BETWEEN ? AND ? "
                 "   OR substr(COALESCE(p.parts_reserved_at,''),1,10) BETWEEN ? AND ? "
-                "   OR substr(COALESCE(p.completed_at,''),1,10) BETWEEN ? AND ? "
-                "ORDER BY a.tag, p.created_at",
-                (frm, to, frm, to, frm, to)).fetchall()
-            if prows:
-                data = [["Turbine", "Priority", "Status", "Created", "Parts reserved",
-                         "Completed", "Completed by", "Note"]]
-                for r in prows:
-                    data.append([
-                        r["tag"], r["priority"] if r["priority"] is not None else "", r["status"],
-                        (r["created_at"] or "")[:10], (r["parts_reserved_at"] or "")[:10],
-                        (r["completed_at"] or "")[:10], r["completed_by_name"] or "",
-                        (r["note"] or "").replace("\r\n", " ").replace("\n", " "),
-                    ])
-                sheets.append(("Pendings", data))
-            if not sheets:
-                raise ApiError(404, "No changes recorded between %s and %s" % (frm, to))
-            fname = "change-report-%s_to_%s.xlsx" % (frm, to)
+                "ORDER BY p.completed_at, a.tag", (frm, to, frm, to)).fetchall()
+            pdata = [["Turbine", "Priority", "Status", "Parts reserved", "Completed",
+                      "Completed by", "Note"]]
+            for r in prows:
+                pdata.append([
+                    r["tag"], r["priority"] if r["priority"] is not None else "", r["status"],
+                    (r["parts_reserved_at"] or "")[:10], (r["completed_at"] or "")[:10],
+                    r["completed_by_name"] or "",
+                    (r["note"] or "").replace("\r\n", " ").replace("\n", " "),
+                ])
+            total += len(prows)
+            sheets.append(("Pendings", pdata))
+
+            if total == 0:
+                raise ApiError(404, "No completions recorded between %s and %s" % (frm, to))
+            fname = "completions-%s_to_%s.xlsx" % (frm, to)
             return 200, RawResponse(
                 build_xlsx(sheets),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

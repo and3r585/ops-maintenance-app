@@ -453,8 +453,8 @@ function viewHome() {
         h("span", { class: "ico" }, "🗃️"),
         h("h3", {}, "Data Explorer"),
         h("p", {}, isAdmin
-          ? "View every asset tab as one editable table, push approved changes to the database, and export a dated change report."
-          : "View every asset tab as one table and export a dated change report.")));
+          ? "View every asset tab as one editable table, push approved changes to the database, and export a dated completions report."
+          : "View every asset tab as one table and export a dated completions report.")));
   }
   root.replaceChildren(shell("home",
     h("div", { class: "page-head" },
@@ -626,6 +626,8 @@ async function viewServicesList() {
     card));
 }
 
+const retroOpen = new Set();   // campaign names expanded on #/retrofits (survives re-render)
+
 async function viewRetrofitsList() {
   loading();
   let d;
@@ -635,25 +637,41 @@ async function viewRetrofitsList() {
   const isAdmin = State.user.role === "ADMIN";
   const reload = () => viewRetrofitsList();
   const wrap = h("div", {});
-  wrap.append(h("div", { class: "page-head" }, h("h1", {}, "Retrofit completions"),
-    h("p", { class: "sub" },
-      `${d.incomplete_retrofit_count} items across ${groups.length} campaigns`
-      + (isAdmin ? " · set a completion date to close one out" : ""))));
+  wrap.append(h("div", { class: "page-head dash-head" },
+    h("div", {},
+      h("h1", {}, "Retrofit completions"),
+      h("p", { class: "sub" },
+        `${d.incomplete_retrofit_count} items across ${groups.length} campaigns`
+        + (isAdmin ? " · expand a campaign and set a completion date to close one out" : ""))),
+    groups.length ? h("button", { class: "btn sm ghost", onclick: () => {
+      const allOpen = groups.every(g => retroOpen.has(g.name));
+      retroOpen.clear();
+      if (!allOpen) groups.forEach(g => retroOpen.add(g.name));
+      reload();
+    } }, groups.every(g => retroOpen.has(g.name)) ? "Collapse all" : "Expand all") : null));
   if (!groups.length) wrap.append(h("div", { class: "empty-state" }, "All retrofits complete."));
+
   for (const g of groups) {
-    const card = h("div", { class: "card" },
-      h("h3", {}, g.name, h("span", { class: "rec-date out" }, g.items.length)));
-    const list = h("div", { class: "rec-list" });
-    for (const it of g.items) {
-      list.append(h("div", { class: "rec-row" },
-        h("div", { class: "rec-name" },
-          h("a", { href: "#/asset/" + it.asset_id + "?tab=Retrofits" }, it.tag),
-          it.status === "in_progress"
-            ? h("span", { class: "rec-date wip", style: "margin-left:.5rem" }, "in progress") : null),
-        dateEditor({ id: it.record_id, date: "", name: it.tag + " · " + g.name, status: it.status },
-          { label: it.tag + " · " + g.name, onSaved: reload })));
+    const open = retroOpen.has(g.name);
+    const head = h("button", { class: "retro-head", "aria-expanded": String(open),
+      onclick: () => { open ? retroOpen.delete(g.name) : retroOpen.add(g.name); reload(); } },
+      h("span", { class: "retro-caret" }, open ? "▾" : "▸"),
+      h("span", { class: "retro-name" }, g.name),
+      h("span", { class: "rec-date out" }, g.items.length));
+    const card = h("div", { class: "card retro-group" }, head);
+    if (open) {
+      const body = h("div", { class: "rec-list" });
+      for (const it of g.items) {
+        body.append(h("div", { class: "rec-row" },
+          h("div", { class: "rec-name" },
+            h("a", { href: "#/asset/" + it.asset_id + "?tab=Retrofits" }, it.tag),
+            it.status === "in_progress"
+              ? h("span", { class: "rec-date wip", style: "margin-left:.5rem" }, "in progress") : null),
+          dateEditor({ id: it.record_id, date: "", name: it.tag + " · " + g.name, status: it.status },
+            { label: it.tag + " · " + g.name, onSaved: reload })));
+      }
+      card.append(body);
     }
-    card.append(list);
     wrap.append(card);
   }
   root.replaceChildren(shell("dashboard",
@@ -837,14 +855,14 @@ async function viewExplorer() {
     refreshFooter();
   }
 
-  // --- change report panel ---
+  // --- completions report panel ---
   const to = h("input", { type: "date", value: todayISO() });
   const from = h("input", { type: "date", value: addDaysISO(todayISO(), -30) });
-  const reportBtn = h("button", { class: "btn" }, "⭳ Download change report (XLSX)");
+  const reportBtn = h("button", { class: "btn" }, "⭳ Download completions (XLSX)");
   reportBtn.onclick = () => {
     if (!from.value || !to.value) { toast("Pick a from and to date", true); return; }
     downloadFile("/explorer/changes?from=" + from.value + "&to=" + to.value,
-      reportBtn, "Change report downloaded", "change-report.xlsx");
+      reportBtn, "Completions report downloaded", "completions.xlsx");
   };
   const exportBtn = h("button", { class: "btn sm" }, "⭳ Export this table (CSV)");
   exportBtn.onclick = () => downloadFile("/explorer/export?category=" + activeCat,
@@ -854,13 +872,15 @@ async function viewExplorer() {
     h("div", { class: "page-head" },
       h("h1", {}, "Data Explorer"),
       h("p", { class: "sub" }, readOnly
-        ? "Every asset tab as one table for all 96 turbines. Read-only — export a table or download a change report."
+        ? "Every asset tab as one table for all 96 turbines. Read-only — export a table or download the completions report."
         : "Every asset tab as one table for all 96 turbines. Edit cells, review, then push approved changes to the database.")),
     h("div", { class: "card" },
-      h("h3", {}, "Change report",
-        h("span", { class: "hint" }, "one worksheet per tab that changed in the window")),
+      h("h3", {}, "Completions report",
+        h("span", { class: "hint" }, "one worksheet per asset tab")),
       h("p", { class: "hint", style: "margin:-.2rem 0 .7rem" },
-        "Queries the change log for every edit made between the two dates and returns an Excel workbook with a tab for each asset tab that was updated."),
+        "Every completion date recorded between the two dates — whether imported or entered in "
+        + "the app — as an Excel workbook with a worksheet for Service dates, HV, Stat, Retrofits, "
+        + "Blades and Components, plus Pendings."),
       h("div", { class: "toolbar" },
         h("label", { style: "display:flex;align-items:center;gap:.4rem;font-weight:400" }, "From", from),
         h("label", { style: "display:flex;align-items:center;gap:.4rem;font-weight:400" }, "To", to),
@@ -1039,10 +1059,7 @@ async function viewAsset(id) {
         dl([["Manufacturer", a.manufacturer], ["Model", a.model], ["Family", a.family],
             ["Serial number", a.serial], ["Installed", fmtDate(a.install_date)],
             ["Take-over cert.", fmtDate(a.toc)], ["Warranty expiry", fmtDate(a.warranty_expiry)]])),
-      h("div", { class: "card defect-card" + (a.defect ? " flagged" : ""), style: "grid-column:1/-1" },
-        h("h3", {}, "Defect / operational issue"),
-        h("p", { style: "margin:0;" + (a.defect ? "" : "color:var(--text-soft)") },
-          a.defect || "No defects or issues affecting work or operation.")),
+      defectCard(),
       h("div", { class: "card next-svc " + dueClass, style: "grid-column:1/-1" },
         h("h3", {}, "Next service due"),
         h("div", { class: "next-svc-body" },
@@ -1052,6 +1069,43 @@ async function viewAsset(id) {
           ns ? ns.name + " — planned from the previous completion + interval"
              : "Recorded on the Service dates tab.")),
       smpCard());
+  }
+
+  /* Defect / operational-issue note — free text, admin-editable, everyone else read-only. */
+  function defectCard() {
+    const card = h("div", { class: "card defect-card" + (a.defect ? " flagged" : ""),
+      style: "grid-column:1/-1" }, h("h3", {}, "Defect / operational issue"));
+    const view = () => {
+      clear(card); card.append(h("h3", {}, "Defect / operational issue"));
+      card.classList.toggle("flagged", !!a.defect);
+      card.append(h("p", { style: "margin:0;white-space:pre-line;"
+        + (a.defect ? "" : "color:var(--text-soft)") },
+        a.defect || "No defects or issues affecting work or operation."));
+      if (isAdmin) card.append(h("button", { class: "btn sm ghost", style: "margin-top:.7rem",
+        onclick: edit }, a.defect ? "Edit" : "Add a note"));
+    };
+    const edit = () => {
+      clear(card); card.append(h("h3", {}, "Defect / operational issue"));
+      const ta = h("textarea", { rows: 3, style: "width:100%",
+        placeholder: "Describe any defect or issue affecting work or operation…" }, a.defect || "");
+      ta.value = a.defect || "";
+      const err = h("div", { class: "form-error" });
+      const save = h("button", { class: "btn sm primary" }, "Save");
+      save.onclick = async () => {
+        const val = ta.value.trim();
+        save.disabled = true;
+        try {
+          const r = await api("/assets/" + a.id, { method: "PATCH", body: { defect: val } });
+          a.defect = r.defect || null;
+          toast("Defect note saved"); view();
+        } catch (e) { save.disabled = false; err.textContent = e.message; }
+      };
+      card.append(ta, err, h("div", { class: "btn-row" }, save,
+        h("button", { class: "btn sm ghost", onclick: view }, "Cancel")));
+      ta.focus();
+    };
+    view();
+    return card;
   }
 
   function stateBadge(v) {

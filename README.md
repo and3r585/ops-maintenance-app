@@ -100,10 +100,11 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   Visible to everyone. Its three drill-downs — **`#/pendings`**, **`#/services`**,
   **`#/retrofits`** — let an **admin edit completion dates in place**: on the *Service
   completions* list, adding a date to a turbine's next service records it and the row
-  advances to the following service; on the *Retrofit completions* list, adding a date
-  closes that campaign out for that turbine. Every edit goes through the approval modal,
-  writes to `asset_records` via `PATCH /api/records/:id`, and shows up everywhere that
-  reads it (the asset's own tabs, the Data Explorer, the change log).
+  advances to the following service; the *Retrofit completions* list groups items by
+  campaign — each campaign collapses/expands (with an **Expand all** toggle) and adding a
+  date to a turbine closes that campaign out for it. Every edit goes through the approval
+  modal, writes to `asset_records` via `PATCH /api/records/:id`, and shows up everywhere
+  that reads it (the asset's own tabs, the Data Explorer, the change log).
   - *Next service due* (dashboard + the asset Details card + `#/services`) = the first
     service with no completion date that falls after the last completed one; its **planned**
     date is the last completion + the interval between the two (72→84 is +12 months, the
@@ -116,11 +117,11 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
     written to a `record_changes` audit log. **Export this table (CSV)** dumps the current
     table as-is. **A cell that is blank in the database stays blank here** — no `—`, no
     placeholder text.
-  - *Change report* — pick a from/to date and download an **.xlsx workbook** with one
-    worksheet per asset tab that had any edit in that window (plus a Pendings sheet for
-    pending entries raised/reserved/completed in the window). Only tabs that actually
-    changed get a sheet. Edits made on an asset's own tab are captured here too, not just
-    Data Explorer ones.
+  - *Completions report* — pick a from/to date and download an **.xlsx workbook** with a
+    worksheet for **every** asset tab (Service dates, HV, Stat, Retrofits, Blades,
+    Components) listing every record whose completion date falls in that window — whether
+    the date was imported from the spreadsheets or entered in the app — plus a Pendings
+    sheet for entries reviewed/completed in the window.
 - **Planning board (admin)** — pick a date; the left rail shows **available technicians** as
   draggable chips (unavailable ones greyed with their reason, from the *Manplan 2025* day
   grid — unavailable = `HOL in WD` / `MED` / `SICK` / `ABS` / `TRG` / `PAT` / `JURY`, blank
@@ -141,7 +142,9 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   simply blank.
   - *Details* — **Identification** (turbine / type / location); an **Asset Details** card
     (make / model / family / serial / key dates, from `Equipment_info.csv`);
-    a **Defect / operational issue** card (KGH 2025 column G — highlighted when present);
+    a **Defect / operational issue** card — free text, **admin-editable** (View / technician
+    read-only), highlighted when present; seeded once from KGH 2025 column G, then owned
+    entirely by the database;
     a **Next service due** card (the next incomplete service and its planned date — see the
     dashboard note above — with a days-away / overdue indicator); and a **Condition
     monitoring (SMP)** box with gearbox / generator / main-bearing state and observations.

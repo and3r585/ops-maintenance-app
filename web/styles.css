@@ -477,13 +477,18 @@ textarea { resize: vertical; min-height: 90px; }
 .filter-chip:hover { color: var(--text); }
 .filter-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
-.retro-tags { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin-top: .5rem; }
-.retro-tags .state-label { margin-right: .3rem; }
-.turb-tag {
-  font-size: .78rem; font-weight: 600; padding: .12rem .45rem; border-radius: 6px;
-  background: rgba(191,91,91,.12); color: var(--danger);
+/* ---- collapsible retrofit campaigns (#/retrofits) ---- */
+.card.retro-group { padding: 0; overflow: hidden; }
+.retro-head {
+  width: 100%; display: flex; align-items: center; gap: .6rem;
+  background: none; border: none; cursor: pointer; font: inherit; text-align: left;
+  padding: .8rem 1.1rem; color: var(--text);
 }
-.turb-tag.wip { background: rgba(200,155,60,.16); color: var(--warn); }
+.retro-head:hover { background: var(--surface-2); }
+.retro-caret { color: var(--text-faint); font-size: .78rem; width: 1ch; flex: none; }
+.retro-name { font-weight: 600; flex: 1; min-width: 0; }
+.retro-group .rec-list { padding: 0 1.1rem .9rem; }
+.retro-group .rec-row:first-child { border-top: 1px solid var(--border); }
 
 /* ---- pending workflow: parts, evidence, inline forms ---- */
 .parts-box, .evidence-box {
