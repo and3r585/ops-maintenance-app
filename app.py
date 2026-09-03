@@ -1402,10 +1402,15 @@ class Handler(BaseHTTPRequestHandler):
             path = "/index.html"
         rel = path.lstrip("/")
         full = os.path.normpath(os.path.join(WEB_DIR, rel))
-        if not full.startswith(WEB_DIR) or not os.path.isfile(full):
-            # SPA fallback
-            full = os.path.join(WEB_DIR, "index.html")
-        self._send_file(full)
+        if full.startswith(WEB_DIR) and os.path.isfile(full):
+            self._send_file(full)
+            return
+        # The SPA uses hash routing, so genuine client routes never reach here.
+        # Fall back to index.html only for extensionless paths; scanner probes like
+        # /.env, /wp-login.php or /db.sql get a real 404 instead of the app shell.
+        if "." in os.path.basename(path):
+            raise ApiError(404, "Not found")
+        self._send_file(os.path.join(WEB_DIR, "index.html"))
 
     def _send_file(self, full):
         ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
