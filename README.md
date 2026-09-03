@@ -127,18 +127,19 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   *Manplan 2025* day grid — unavailable = `HOL in WD` / `MED` / `SICK` / `ABS` / `TRG` /
   `PAT` / `JURY`, blank or anything else = available). Drag technicians into **teams of up
   to 4**; a request needs a **contract type** (dropdown mirrored from the notification-request
-  workbook), a **description** and at least one technician. The **turbine** is optional — with
-  one, the request is filed to that turbine's history on submit; without one it is export-only.
-  Six contract types are never turbine-specific (`STORES - SERVICE`, `STORES - CORRECTIVE`,
-  `SUPERVISOR DUTIES`, `VEHICLE CHECK`, `WEATHER/STAND DOWN`, `GENERAL ADMIN`) and hide the
-  turbine field entirely. An optional **ATS Case** is appended to the history description. A
-  fresh empty team appears once the previous one has a technician, and stops when no
-  available technicians remain. A technician placed on more than one team that date raises a
-  duplicate **warning** (not a block). **Submit Request** (enabled once any one request is
-  complete) downloads the `.xlsx` — laid out for copy/paste into the target sheet (Hub `SO5`,
-  Site `Kilgallioch`, turbine `<tag> Kilgallioch` or blank, six technician columns) — files
-  every request that has a turbine into that turbine's **History** tab (tagged *Notification
-  request*), and clears the whole board (incomplete drafts included) for the next set.
+  workbook), a **description**, at least one technician, and a **turbine**. Six contract
+  types are the exception — `STORES - SERVICE`, `STORES - CORRECTIVE`, `SUPERVISOR DUTIES`,
+  `VEHICLE CHECK`, `WEATHER/STAND DOWN`, `GENERAL ADMIN` — they hide the turbine field, are
+  export-only and are filed nowhere. Every other (turbine) request is saved to that turbine's
+  history on submit. An optional **ATS Case** is appended to the history description. A fresh
+  empty team appears once the previous one has a technician, and stops when no available
+  technicians remain. A technician placed on more than one team that date raises a duplicate
+  **warning** (not a block). **Submit Request** (enabled once any one request is complete)
+  downloads the `.xlsx` — laid out for copy/paste into the target sheet (Hub `SO5`, Site
+  `Kilgallioch`, turbine `<tag> Kilgallioch` or blank for the six exceptions, six technician
+  columns) — files every turbine request into that turbine's **History** tab (tagged
+  *Notification request*), and clears the whole board (incomplete drafts included) for the
+  next set.
 - **Asset detail** — tabs for **Details**, **Service dates**, **HV history**, **Stat history**,
   **Retrofits**, **Blades**, **Components**, **History** and **Pendings**, with **‹ ›**
   previous/next-turbine buttons in the header that step through the register alphabetically

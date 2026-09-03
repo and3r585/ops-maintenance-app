@@ -1636,9 +1636,15 @@ def _notif_teams(conn, date):
 
 def _team_complete(t):
     """A request is ready once it has a contract type, a description and at least
-    one technician. A turbine is always optional — with one the request is filed to
-    that turbine's history on submit, without one it is export-only."""
-    return bool(t["contract_type"] and (t["description"] or "").strip() and t["members"])
+    one technician. Every contract type needs a turbine too, except the six
+    non-turbine ones (STORES / SUPERVISOR DUTIES / VEHICLE CHECK / WEATHER / GENERAL
+    ADMIN) — those are export-only and filed nowhere; all others are saved to the
+    turbine's history on submit."""
+    if not (t["contract_type"] and (t["description"] or "").strip() and t["members"]):
+        return False
+    if t["contract_type"] in NO_TURBINE_CONTRACTS:
+        return True
+    return bool(t["asset_id"])
 
 
 def load_notif(conn, date):

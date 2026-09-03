@@ -447,7 +447,7 @@ function viewHome() {
         h("span", { class: "ico" }, "📅"),
         h("h3", {}, "Notification Request"),
         h("p", {}, isAdmin
-          ? "Drag technicians into teams, add a contract type and description (turbine optional), then submit to export the requests and file them to asset history."
+          ? "Drag technicians into teams, add a contract type, turbine and description, then submit to export the requests and file them to asset history."
           : "See the day's notification requests — teams, turbines and descriptions.")),
       h("button", { class: "tile", onclick: () => navigate("#/explorer") },
         h("span", { class: "ico" }, "🗃️"),
@@ -1516,7 +1516,7 @@ async function viewPlanning() {   /* Notification Request */
     const ct = fieldSelect("contract_type", "— select contract type —",
       plan.contract_types || [], team.contract_type, { disabled: readOnly, redraw: true });
     const turb = fieldSelect("asset_id",
-      noTurbine ? "Not required for this contract type" : "— no turbine (export only) —",
+      noTurbine ? "Not required for this contract type" : "— select turbine —",
       noTurbine ? [] : (plan.turbines || []).map(t => ({ value: t.id, label: t.tag })),
       noTurbine ? "" : team.asset_id, { disabled: readOnly || noTurbine });
 
@@ -1537,7 +1537,7 @@ async function viewPlanning() {   /* Notification Request */
     card.append(
       h("div", { class: "notif-fields" },
         h("label", { class: "notif-lbl" }, "Contract type", ct.sel),
-        h("label", { class: "notif-lbl" }, "Turbine (optional)", turb.sel),
+        h("label", { class: "notif-lbl" }, "Turbine", turb.sel),
         h("label", { class: "notif-lbl wide" }, "Description", desc),
         h("label", { class: "notif-lbl wide" }, "ATS Case", ats)));
     return card;
@@ -1622,7 +1622,7 @@ async function viewPlanning() {   /* Notification Request */
       h("p", { class: "sub" }, readOnly
         ? "Read-only view. Pick a roster date to see that day's notification-request teams."
         : "Pick the roster date, drag technicians into teams of up to " + (plan.team_size || 4)
-          + ", add a contract type and description (turbine optional), then Submit Request to export and file to asset history.")),
+          + ", add a contract type, turbine and description, then Submit Request to export and file to asset history.")),
     h("div", { class: "plan-layout" }, rail, h("div", { class: "notif-wrap" }, board))));
   draw();
 }
