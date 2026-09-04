@@ -382,6 +382,38 @@ def seed():
     conn = get_db()
     conn.executescript(SCHEMA)
 
+    # --- repair: on some SQLite builds, rebuilding the `users` table via
+    #     RENAME/CREATE/DROP rewrites "REFERENCES users" to "REFERENCES users_old" in
+    #     every referencing table, then users_old is dropped — leaving dangling foreign
+    #     keys that break the next INSERT. Rebuild each affected table with the
+    #     reference pointed back at `users`. ---
+    bad = [r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND sql LIKE '%users_old%'")]
+    if bad:
+        for name in bad:
+            old_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?", (name,)
+            ).fetchone()["sql"]
+            cols = [r["name"] for r in conn.execute("PRAGMA table_info(%s)" % name)]
+            fixed = old_sql.replace("users_old", "users")
+            tmp = name + "__fkfix"
+            fixed = re.sub(r'CREATE TABLE\s+["\']?' + re.escape(name) + r'["\']?',
+                           'CREATE TABLE "%s"' % tmp, fixed, count=1)
+            collist = ",".join('"%s"' % c for c in cols)
+            conn.executescript(
+                "PRAGMA legacy_alter_table=ON;"
+                "PRAGMA foreign_keys=OFF;"
+                + fixed + ";"
+                + 'INSERT INTO "%s" (%s) SELECT %s FROM "%s";' % (tmp, collist, collist, name)
+                + 'DROP TABLE "%s";' % name
+                + 'ALTER TABLE "%s" RENAME TO "%s";' % (tmp, name)
+                + "PRAGMA foreign_keys=ON;"
+                + "PRAGMA legacy_alter_table=OFF;")
+        conn.commit()
+        conn.close()
+        conn = get_db()                      # reopen so the patched schema is reloaded
+        print("  repaired     users foreign key on %d table(s): %s" % (len(bad), ", ".join(bad)))
+
     # --- migration: retire early demo/scratch tables. The day-plan board (jobs,
     #     plan_team, plan_member) is replaced by Notification Request; all three
     #     only ever held transient scratch data. ---
@@ -412,6 +444,7 @@ def seed():
     ).fetchone()
     if udef and "'CONTRACTOR'" not in udef["sql"]:
         conn.executescript(
+            "PRAGMA legacy_alter_table=ON;"       # don't rewrite FK refs in other tables
             "PRAGMA foreign_keys=OFF;"
             "ALTER TABLE users RENAME TO users_old;"
             "CREATE TABLE users ("
@@ -426,6 +459,7 @@ def seed():
             "INSERT INTO users SELECT id,username,password_hash,salt,role,display_name,active,created_at FROM users_old;"
             "DROP TABLE users_old;"
             "PRAGMA foreign_keys=ON;"
+            "PRAGMA legacy_alter_table=OFF;"
         )
 
     # --- users: synced from source/Credentials.csv on every start (+ `admin` break-glass) ---
