@@ -143,7 +143,7 @@ CREATE TABLE IF NOT EXISTS users (
     username      TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     salt          TEXT NOT NULL,
-    role          TEXT NOT NULL CHECK (role IN ('ADMIN','TECHNICIAN','VIEW')),
+    role          TEXT NOT NULL CHECK (role IN ('ADMIN','TECHNICIAN','VIEW','CONTRACTOR')),
     display_name  TEXT NOT NULL,
     active        INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL
@@ -183,13 +183,15 @@ CREATE TABLE IF NOT EXISTS assets (
 -- Notification Request rail); roster_day holds one code per technician per day
 -- (blank/available = no row). Seeded once from the Manplan tab, then app-owned.
 CREATE TABLE IF NOT EXISTS roster_tech (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT NOT NULL,
-    user_id     INTEGER REFERENCES users(id),   -- optional link to a login account
-    active      INTEGER NOT NULL DEFAULT 1,      -- 0 = archived (calendar kept)
-    sort        INTEGER NOT NULL DEFAULT 0,
-    created_at  TEXT NOT NULL,
-    archived_at TEXT
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT NOT NULL,
+    user_id       INTEGER REFERENCES users(id),   -- optional link to a login account
+    active        INTEGER NOT NULL DEFAULT 1,      -- 0 = archived (calendar kept)
+    is_contractor INTEGER NOT NULL DEFAULT 0,      -- 1 = contractor: not on the roster grid,
+                                                   --     always available in Notification Request
+    sort          INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL,
+    archived_at   TEXT
 );
 CREATE TABLE IF NOT EXISTS roster_day (
     tech_id INTEGER NOT NULL REFERENCES roster_tech(id),
@@ -402,12 +404,13 @@ def seed():
     _addcol("pending_photos", "added_by", "INTEGER")
     _addcol("pending_entries", "updated_by", "INTEGER")
     _addcol("pending_entries", "updated_at", "TEXT")
+    _addcol("roster_tech", "is_contractor", "INTEGER NOT NULL DEFAULT 0")
 
-    # --- migration: widen the users.role CHECK to allow the read-only 'VIEW' role ---
+    # --- migration: widen the users.role CHECK (adds 'VIEW', then 'CONTRACTOR') ---
     udef = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
     ).fetchone()
-    if udef and "'VIEW'" not in udef["sql"]:
+    if udef and "'CONTRACTOR'" not in udef["sql"]:
         conn.executescript(
             "PRAGMA foreign_keys=OFF;"
             "ALTER TABLE users RENAME TO users_old;"
@@ -416,7 +419,7 @@ def seed():
             "  username TEXT UNIQUE NOT NULL,"
             "  password_hash TEXT NOT NULL,"
             "  salt TEXT NOT NULL,"
-            "  role TEXT NOT NULL CHECK (role IN ('ADMIN','TECHNICIAN','VIEW')),"
+            "  role TEXT NOT NULL CHECK (role IN ('ADMIN','TECHNICIAN','VIEW','CONTRACTOR')),"
             "  display_name TEXT NOT NULL,"
             "  active INTEGER NOT NULL DEFAULT 1,"
             "  created_at TEXT NOT NULL);"
@@ -467,6 +470,11 @@ def seed():
         if added:
             print("  roster       added %d extra technician(s) from the Manplan grid" % added)
         _meta_set(conn, "roster_extra_techs_v1", "1")
+
+    # --- contractors: synced from the CONTRACTOR logins on every start. They get a
+    #     roster_tech row (is_contractor=1) so they can be dragged onto a team, but they
+    #     never appear on the roster calendar and are always available. ---
+    sync_contractors(conn)
 
     # --- one-time turbine / asset / history import.
     #     Runs ONLY when the database has never been populated. Once assets exist the
@@ -707,6 +715,31 @@ def sync_users(conn, creds):
     for uname, row in existing.items():
         if uname not in keep and row["active"]:
             conn.execute("UPDATE users SET active=0 WHERE username=?", (uname,))
+
+
+def sync_contractors(conn):
+    """Keep a roster_tech row (is_contractor=1) for every active CONTRACTOR login, so
+    contractors can be dragged onto Notification Request teams. Runs on every start;
+    a contractor whose login is gone is archived, not deleted."""
+    users = {r["id"]: r for r in conn.execute(
+        "SELECT id, display_name FROM users WHERE role = 'CONTRACTOR' AND active = 1")}
+    have = {r["user_id"]: r for r in conn.execute(
+        "SELECT * FROM roster_tech WHERE is_contractor = 1")}
+    mx = conn.execute("SELECT COALESCE(MAX(sort), 0) m FROM roster_tech").fetchone()["m"]
+    for uid, u in users.items():
+        row = have.get(uid)
+        if row is None:
+            mx += 1
+            conn.execute(
+                "INSERT INTO roster_tech (name, user_id, active, is_contractor, sort, created_at) "
+                "VALUES (?,?,1,1,?,?)", (u["display_name"], uid, mx, now()))
+        elif not row["active"] or row["name"] != u["display_name"]:
+            conn.execute("UPDATE roster_tech SET name = ?, active = 1 WHERE id = ?",
+                         (u["display_name"], row["id"]))
+    for uid, row in have.items():
+        if uid not in users and row["active"]:
+            conn.execute("UPDATE roster_tech SET active = 0, archived_at = ? WHERE id = ?",
+                         (now(), row["id"]))
 
 
 def sync_smp(conn, smp):
@@ -1059,9 +1092,16 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["modules"] and method == "GET":
             user = self._require(conn)
             rows = conn.execute("SELECT * FROM modules WHERE enabled = 1 ORDER BY sort").fetchall()
-            elevated = user["role"] in ("ADMIN", "VIEW")   # VIEW sees everything an admin sees
-            visible = [dict(r) for r in rows if r["min_role"] == "TECHNICIAN" or elevated]
-            return 200, {"modules": visible}
+            role = user["role"]
+
+            def can_see(m):
+                if role in ("ADMIN", "VIEW"):        # VIEW sees everything an admin sees
+                    return True
+                if role == "CONTRACTOR":             # dashboard + asset information only
+                    return m["key"] in ("dashboard", "assets")
+                return m["min_role"] == "TECHNICIAN"
+
+            return 200, {"modules": [dict(r) for r in rows if can_see(r)]}
 
         # --- site dashboard (any signed-in user; read-only figures) ---
         if parts == ["dashboard"] and method == "GET":
@@ -1229,7 +1269,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # --- Technician Roster ---
         if parts == ["roster"] and method == "GET":
-            user = self._require(conn)
+            user = self._require(conn, ("ADMIN", "VIEW", "TECHNICIAN"))
             return 200, load_roster_month(conn, user, query)
 
         if parts == ["roster"] and method == "PATCH":
@@ -1300,13 +1340,14 @@ class Handler(BaseHTTPRequestHandler):
             self._require(conn, ("ADMIN", "VIEW"))
             archived = query.get("archived", ["0"])[0] == "1"
             sql = ("SELECT t.id, t.name, t.active, t.archived_at, u.username AS linked_username "
-                   "FROM roster_tech t LEFT JOIN users u ON u.id = t.user_id ")
+                   "FROM roster_tech t LEFT JOIN users u ON u.id = t.user_id "
+                   "WHERE t.is_contractor = 0 ")
             if not archived:
-                sql += "WHERE t.active = 1 "
+                sql += "AND t.active = 1 "
             sql += "ORDER BY t.active DESC, t.sort, t.name"
             free = conn.execute(
                 "SELECT id, display_name, username, role FROM users WHERE active = 1 "
-                "AND username <> 'admin' "
+                "AND username <> 'admin' AND role <> 'CONTRACTOR' "
                 "AND id NOT IN (SELECT user_id FROM roster_tech WHERE user_id IS NOT NULL) "
                 "ORDER BY display_name").fetchall()
             return 200, {"techs": [dict(r) for r in conn.execute(sql)],
@@ -1471,7 +1512,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._require(conn)
                 return 200, {"pendings": load_pendings(conn, asset_id=asset_id)}
             if method == "POST":
-                user = self._require(conn, ("ADMIN", "TECHNICIAN"))
+                user = self._require(conn, ("ADMIN", "TECHNICIAN", "CONTRACTOR"))
                 return self._create_pending(conn, asset_id, user)
 
         # --- pendings ---
@@ -1986,7 +2027,8 @@ def load_roster_month(conn, user, query):
         techs = [dict(my_tech)] if my_tech else []
     else:
         techs = [dict(r) for r in conn.execute(
-            "SELECT id, name FROM roster_tech WHERE active = 1 ORDER BY sort, name")]
+            "SELECT id, name FROM roster_tech WHERE active = 1 AND is_contractor = 0 "
+            "ORDER BY sort, name")]
 
     out = {"month": month, "days": days, "scope": scope,
            "can_edit": user["role"] == "ADMIN", "key": ROSTER_KEY,
@@ -2127,9 +2169,9 @@ def load_notif(conn, date):
     """Everything the Notification Request screen needs for one roster date.
     Technicians and their availability come from the roster (roster_tech / roster_day)."""
     tech_rows = conn.execute(
-        "SELECT t.id, t.name AS display_name, d.code AS reason "
+        "SELECT t.id, t.name AS display_name, t.is_contractor, d.code AS reason "
         "FROM roster_tech t LEFT JOIN roster_day d ON d.tech_id = t.id AND d.on_date = ? "
-        "WHERE t.active = 1 ORDER BY t.sort, t.name", (date,)).fetchall()
+        "WHERE t.active = 1 ORDER BY t.is_contractor, t.sort, t.name", (date,)).fetchall()
 
     teams = _notif_teams(conn, date)
 
@@ -2145,13 +2187,19 @@ def load_notif(conn, date):
         for uid, tns in placed_teams.items() if len(tns) > 1
     ]
 
-    available, unavailable = [], []
+    available, contractors, unavailable = [], [], []
     for r in tech_rows:
+        who = {"id": r["id"], "display_name": r["display_name"], "reason": None}
+        if r["is_contractor"]:
+            # contractors are always available; drop them from the box once placed
+            if r["id"] not in placed_teams:
+                contractors.append(who)
+            continue
         code = r["reason"] or ""
         if code not in ROSTER_AVAILABLE:
-            unavailable.append({"id": r["id"], "display_name": r["display_name"], "reason": code})
+            unavailable.append({**who, "reason": code})
         elif r["id"] not in placed_teams:
-            available.append({"id": r["id"], "display_name": r["display_name"], "reason": None})
+            available.append(who)
 
     return {
         "date": date,
@@ -2160,6 +2208,7 @@ def load_notif(conn, date):
         "team_size": NOTIF_TEAM_SIZE,
         "teams": teams,
         "available": available,
+        "contractors": contractors,
         "unavailable": unavailable,
         "placed_count": len(placed_teams),
         "duplicates": duplicates,

@@ -71,17 +71,23 @@ Railway / Fly.io / a small VPS work the same way — run `python app.py`, give i
 ## Logins
 
 Every account comes from **`source/Credentials.csv`** (`Name, First name, Username, Access,
-Password`). `Access` maps to a role: **`Admin`** → Admin, **`View`** → View, anything else →
-Technician. The list is re-synced into the database on **every server start** — edit the CSV,
-restart, and the usernames / passwords / roles update in place (accounts dropped from the CSV
-are deactivated, not deleted, so history stays intact). A built-in `admin` / `admin123`
-break-glass account is always kept (override with `$ADMIN_PASSWORD`).
+Password`). `Access` maps to a role: **`Admin`** → Admin, **`View`** → View,
+**`Contractor`** → Contractor, anything else → Technician. The list is re-synced into the
+database on **every server start** — edit the CSV, restart, and the usernames / passwords /
+roles update in place (accounts dropped from the CSV are deactivated, not deleted, so
+history stays intact). A built-in `admin` / `admin123` break-glass account is always kept
+(override with `$ADMIN_PASSWORD`).
 
 | Role | Sees | Can change |
 |------|------|-----------|
+| **Contractor** | Site Dashboard, Asset Information | **only** add a pending entry (note + photo, same as a technician) |
 | **Technician** | Site Dashboard, Asset Information, their own Technician Roster | **only** add a pending entry, or complete a reviewed one (mandatory comment + photo) |
 | **View** | everything an Admin sees — Site Dashboard, Asset Information, Technician Roster (all), Notification Request, Data Explorer | **nothing** — every page is read-only; CSV / change-report exports still work |
 | **Admin** | everything | everything — service/HV/retrofit/blade dates, pending review + parts, notification requests, bulk edits |
+
+Every `Contractor` login also gets a `roster_tech` row (synced each start) so contractors
+appear in **Notification Request** — in their own box between *Available technicians* and
+*Unavailable*, always available — but never on the Technician Roster calendar.
 
 ## What's built
 
@@ -150,8 +156,9 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   Notification Request) and restore.
 - **Notification Request (admin)** — pick a **roster date**; the left rail shows **available
   technicians** as draggable chips, straight from the roster: available only on a **blank or
-  `KILG`** day, every other code greyed with the code as the reason. Drag technicians into **teams of up
-  to 4**; a request needs a **contract type** (dropdown mirrored from the notification-request
+  `KILG`** day, every other code greyed with the code as the reason. A **Contractors** box
+  sits between available and unavailable — every `Contractor` login, always available. Drag
+  technicians (or contractors) into **teams of up to 4**; a request needs a **contract type** (dropdown mirrored from the notification-request
   workbook), a **description**, at least one technician, and a **turbine**. Six contract
   types are the exception — `STORES - SERVICE`, `STORES - CORRECTIVE`, `SUPERVISOR DUTIES`,
   `VEHICLE CHECK`, `WEATHER/STAND DOWN`, `GENERAL ADMIN` — they hide the turbine field, are

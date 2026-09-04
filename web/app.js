@@ -565,7 +565,9 @@ function viewHome() {
         ? "Browse the asset register, review full details and history, and edit records."
         : role === "VIEW"
         ? "Browse the asset register and review full details and history."
-        : "Browse the asset register, review full details and history, and log pending observations with photos.")),
+        : "Browse the asset register, review full details and history, and log pending observations with photos.")));
+  if (role !== "CONTRACTOR") {
+    tiles.append(
       h("button", { class: "tile", onclick: () => navigate("#/roster") },
         h("span", { class: "ico" }, "🗓️"),
         h("h3", {}, "Technician Roster"),
@@ -574,6 +576,7 @@ function viewHome() {
           : role === "VIEW"
           ? "Month calendar of every technician's roster, plus the team view."
           : "Your monthly roster calendar.")));
+  }
   if (elevated) {
     tiles.append(
       h("button", { class: "tile", onclick: () => navigate("#/planning") },
@@ -1111,7 +1114,7 @@ async function viewAsset(id) {
   } catch (e) { return renderError(e); }
   const a = detail.asset;
   const isAdmin = State.user.role === "ADMIN";
-  const canAddPending = State.user.role === "ADMIN" || State.user.role === "TECHNICIAN";
+  const canAddPending = ["ADMIN", "TECHNICIAN", "CONTRACTOR"].includes(State.user.role);
 
   const tabWrap = h("div", {});
   const tabs = ["Details", "Service dates", "HV history", "Stat history", "Retrofits", "Blades", "Components", "History", "Pendings"];
@@ -1760,6 +1763,11 @@ async function viewPlanning() {   /* Notification Request */
         "Available technicians (" + plan.available.length + ")"
         + (plan.placed_count ? " · " + plan.placed_count + " on teams" : "")),
       availWrap);
+    const contractors = plan.contractors || [];
+    if (contractors.length) rail.append(
+      h("h3", { class: "rail-head" }, "Contractors (" + contractors.length + ")"),
+      h("div", { class: "chip-wrap", "data-accept": "tech", "data-team": "rail" },
+        ...contractors.map(t => techChip(t))));
     if (plan.unavailable.length) rail.append(
       h("h3", { class: "rail-head" }, "Unavailable (" + plan.unavailable.length + ")"),
       h("div", { class: "chip-wrap" }, ...plan.unavailable.map(t => techChip(t))));
