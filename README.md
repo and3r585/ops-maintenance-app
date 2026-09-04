@@ -148,15 +148,16 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   types are the exception — `STORES - SERVICE`, `STORES - CORRECTIVE`, `SUPERVISOR DUTIES`,
   `VEHICLE CHECK`, `WEATHER/STAND DOWN`, `GENERAL ADMIN` — they hide the turbine field, are
   export-only and are filed nowhere. Every other (turbine) request is saved to that turbine's
-  history on submit. An optional **ATS Case** is appended to the history description. A fresh
-  empty team appears once the previous one has a technician, and stops when no available
-  technicians remain. A technician placed on more than one team that date raises a duplicate
-  **warning** (not a block). **Submit Request** (enabled once any one request is complete)
-  downloads the `.xlsx` — laid out for copy/paste into the target sheet (Hub `SO5`, Site
-  `Kilgallioch`, turbine `<tag> Kilgallioch` or blank for the six exceptions, six technician
-  columns) — files every turbine request into that turbine's **History** tab (tagged
-  *Notification request*), and clears the whole board (incomplete drafts included) for the
-  next set.
+  history on submit. An optional **ATS Case** (appended to the history description) and an
+  optional **SON** (Service Order Number → the *SGRE Service Order Number* column and the
+  history `service_order`) sit alongside the description. A fresh empty team appears once
+  the previous one has a technician, and stops when no available technicians remain. A
+  technician placed on more than one team that date raises a duplicate **warning** (not a
+  block). **Submit Request** (enabled once any one request is complete) downloads the
+  `.xlsx` — laid out for copy/paste into the target sheet (Hub `SO5`, Site `Kilgallioch`,
+  turbine `<tag> Kilgallioch` or blank for the six exceptions, six technician columns) —
+  files every turbine request into that turbine's **History** tab (tagged *Notification
+  request*), and clears the whole board (incomplete drafts included) for the next set.
 - **Asset detail** — tabs for **Details**, **Service dates**, **HV history**, **Stat history**,
   **Retrofits**, **Blades**, **Components**, **History** and **Pendings**, with **‹ ›**
   previous/next-turbine buttons in the header that step through the register alphabetically
@@ -174,12 +175,14 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
     monitoring (SMP)** box with gearbox / generator / main-bearing state and observations,
     re-synced from `source/KGH_SMP.csv` on every start (states: Normal / Monitoring /
     Action&nbsp;-&nbsp;Low/Medium/High / Damaged / No&nbsp;SMP&nbsp;data).
-  - *Service dates* — a **Service schedule** table (72 → 132 month) with two columns:
+  - *Service dates* — a **Service schedule** table (72 → 132 month) with:
     **Planned** = the previous service's completion date plus the interval (derived — so
     entering a completion date advances the next service's planned date, e.g. 108-month
-    completed → 114-month planned), and **Completed** = the editable date (`PATCH
-    /api/records/:id`). 72–114 seed from `KGH_2025.csv`; 120/126/132 start blank. The
-    **5-Year Oil Exchange** sits in its own box below, tracked separately.
+    completed → 114-month planned); an optional **Start date** admins can set on each
+    still-open service from **102 months on** (it disappears once a completion date is
+    entered); and **Completed** = the editable date (`PATCH /api/records/:id`). 72–114
+    seed from `KGH_2025.csv`; 120/126/132 start blank. The **5-Year Oil Exchange** sits in
+    its own box below, tracked separately.
     Any date an **admin** changes on an asset opens an **approval modal** (was → new)
     before it is written and logged — the same review step as the Data Explorer.
   - *Blades* — blade drone inspection date (from `KGH_2025.csv`) with the same **＋ Add date**
@@ -205,9 +208,13 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
     affected system; `CREA`→Submitted, `APR`→Reviewed). Flow is
     **Submitted → Reviewed → Completed**: to move an entry to **Reviewed** an admin must
     assign a **priority of 1–5** (1 highest); the admin may then reserve parts (part numbers,
-    quantities, service order); a technician completes with a mandatory comment + evidence
-    photo. The **#/pendings** list (from the dashboard) filters by status and its
-    **Export (CSV)** button exports exactly the current filter.
+    quantities, service order). While **Reviewed**, *either* an admin or a technician can
+    **Add photo / part** — an optional photo plus an optional part number + quantity, each
+    stamped with who added it and when; the entry records its last-changed-by/at. A
+    technician completes with a mandatory comment + evidence photo. On **app entry** an
+    admin gets a one-off pop-up if any entries are still awaiting review. The **#/pendings**
+    list (from the dashboard) filters by status and its **Export (CSV)** button exports
+    exactly the current filter.
     Photos are resized to 4000&nbsp;px / q90 on upload (Pillow) and get a 480&nbsp;px list
     thumbnail; the list shows the thumbnail, clicking opens the full image. Files live in
     `data/uploads/` and are served with a one-year immutable cache. Every photo URL is built

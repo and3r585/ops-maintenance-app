@@ -127,6 +127,7 @@ function dateEditor(rec, opts) {
   opts = opts || {};
   const isAdmin = State.user && State.user.role === "ADMIN";
   const label = opts.label || rec.name || "date";
+  const field = opts.field || "occurred_on";
   if (!isAdmin || !rec.id) {
     return h("span", { class: "rec-date" + (rec.date ? "" : " muted") },
       rec.date ? fmtDate(rec.date) : "");
@@ -150,8 +151,8 @@ function dateEditor(rec, opts) {
       }]);
       if (!ok) { render(); return; }
       try {
-        const r = await api("/records/" + rec.id, { method: "PATCH", body: { occurred_on: nv } });
-        rec.date = r.occurred_on;
+        const r = await api("/records/" + rec.id, { method: "PATCH", body: { [field]: nv } });
+        rec.date = r[field];
         if (r.status) rec.status = r.status;
         toast(nv ? "Date saved" : "Date cleared");
         if (opts.onSaved) opts.onSaved(rec.date, rec.status); else render();
@@ -177,7 +178,8 @@ function pendingItem(p, opts) {
   const isAdmin = State.user.role === "ADMIN";
   const canComplete = State.user.role === "ADMIN" || State.user.role === "TECHNICIAN";
   const reload = opts.onChange || (() => {});
-  const notePhotos = (p.photos || []).filter(x => x.kind !== "evidence");
+  const notePhotos = (p.photos || []).filter(x => x.kind === "note");
+  const reviewedPhotos = (p.photos || []).filter(x => x.kind === "reviewed");
   const evidence = (p.photos || []).filter(x => x.kind === "evidence");
 
   const meta = [];
@@ -197,15 +199,22 @@ function pendingItem(p, opts) {
     notePhotos.length ? h("div", { class: "photos" }, ...notePhotos.map(ph =>
       h("img", { src: ph.thumb || ph.url, alt: "photo", loading: "lazy", onclick: () => lightbox(ph.url) }))) : null);
 
-  // parts reservation
-  if ((p.parts && p.parts.length) || p.parts_service_order) {
+  // parts reserved / photos added while reviewed
+  if ((p.parts && p.parts.length) || p.parts_service_order || reviewedPhotos.length) {
     card.append(h("div", { class: "parts-box" },
-      h("div", { class: "parts-title" }, "Parts reserved",
-        p.parts_service_order ? h("span", { class: "wo-so" }, "SO " + p.parts_service_order) : null),
-      h("div", { class: "parts-list" },
-        ...(p.parts || []).map(pt => h("div", { class: "part-line" },
+      h("div", { class: "parts-title" }, "Parts & photos",
+        p.parts_service_order ? h("span", { class: "wo-so" }, "SO " + p.parts_service_order) : null,
+        p.updated_by_name ? h("span", { class: "hint" },
+          "last change by " + p.updated_by_name + (p.updated_at ? " · " + fmtWhen(p.updated_at) : "")) : null),
+      (p.parts && p.parts.length) ? h("div", { class: "parts-list" },
+        ...p.parts.map(pt => h("div", { class: "part-line" },
           h("span", { class: "pl-num" }, esc(pt.part_number)),
-          h("span", { class: "pl-qty" }, "×" + esc(pt.quantity)))))));
+          h("span", { class: "pl-qty" }, "×" + esc(pt.quantity)),
+          pt.added_by_name ? h("span", { class: "hint" },
+            pt.added_by_name + (pt.added_at ? " · " + fmtWhen(pt.added_at) : "")) : null))) : null,
+      reviewedPhotos.length ? h("div", { class: "photos" }, ...reviewedPhotos.map(ph =>
+        h("img", { src: ph.thumb || ph.url, alt: "photo", loading: "lazy", title: (ph.added_by_name || "") + (ph.created_at ? " · " + fmtWhen(ph.created_at) : ""),
+          onclick: () => lightbox(ph.url) }))) : null));
   }
 
   // completion evidence
@@ -226,9 +235,12 @@ function pendingItem(p, opts) {
       onclick: () => { if (!card.querySelector(".review-form")) card.append(reviewForm()); } }, "Mark reviewed"));
   }
   if (p.status === "REVIEWED") {
+    if (canComplete) {
+      acts.append(h("button", { class: "btn sm", onclick: () => { if (!card.querySelector(".addition-form")) card.append(additionForm()); } }, "Add photo / part"));
+    }
     if (isAdmin) {
       acts.append(h("button", { class: "btn sm", onclick: () => card.append(partsForm()) },
-        (p.parts && p.parts.length ? "Edit parts reserved" : "Parts reserved")));
+        (p.parts && p.parts.length ? "Edit parts reserved" : "Reserve parts")));
       acts.append(h("button", { class: "btn sm ghost", onclick: () => patchStatus("SUBMITTED") }, "Revert to submitted"));
     }
     if (canComplete) {
@@ -307,6 +319,42 @@ function pendingItem(p, opts) {
         await api("/pendings/" + p.id + "/parts", { method: "POST",
           body: { service_order: soInput.value.trim(), parts: list } });
         toast("Parts reserved"); reload();
+      } catch (e) { err.textContent = e.message; }
+    }
+  }
+
+  function additionForm() {
+    const box = h("div", { class: "inline-form addition-form" });
+    const pn = h("input", { placeholder: "Part number (optional)", class: "pn" });
+    const qty = h("input", { placeholder: "Qty", value: "1", class: "qty" });
+    const fileIn = h("input", { type: "file", accept: "image/*", multiple: true, capture: "environment" });
+    const preview = h("div", { class: "thumbs-preview" });
+    const err = h("div", { class: "form-error" });
+    fileIn.addEventListener("change", () => {
+      clear(preview);
+      [...fileIn.files].slice(0, 8).forEach(f => {
+        const img = h("img", {}); const rd = new FileReader();
+        rd.onload = () => img.src = rd.result; rd.readAsDataURL(f); preview.append(img);
+      });
+    });
+    box.append(
+      h("label", {}, "Add a photo and / or a part to this reviewed entry"),
+      h("div", { class: "part-row" }, pn, qty),
+      h("div", { class: "field", style: "margin-top:.5rem" }, h("label", {}, "Photo"), fileIn,
+        h("div", { class: "hint" }, "On a phone this opens the camera."), preview),
+      err,
+      h("div", { class: "btn-row" },
+        h("button", { class: "btn sm primary", type: "button", onclick: submit }, "Save"),
+        h("button", { class: "btn sm ghost", type: "button", onclick: () => box.remove() }, "Cancel")));
+    return box;
+    async function submit() {
+      if (!pn.value.trim() && !fileIn.files.length) { err.textContent = "Add a photo, a part number, or both."; return; }
+      const fd = new FormData();
+      if (pn.value.trim()) { fd.append("part_number", pn.value.trim()); fd.append("quantity", qty.value.trim() || "1"); }
+      [...fileIn.files].slice(0, 8).forEach(f => fd.append("photos", f));
+      try {
+        await api("/pendings/" + p.id + "/addition", { method: "POST", form: fd });
+        toast("Added"); reload();
       } catch (e) { err.textContent = e.message; }
     }
   }
@@ -1173,6 +1221,8 @@ async function viewAsset(id) {
         + "Planned = the previous service's completion date plus the interval"
         + (isAdmin ? "; set a completion date to advance the schedule." : ".")));
 
+    // planned start date only offered for upcoming services from 102 months on
+    const startCol = svc.some(r => monthOf(r.name) >= 102 && !r.date);
     const tb = h("tbody", {});
     let prev = null;
     for (const r of svc) {
@@ -1180,17 +1230,29 @@ async function viewAsset(id) {
       // the three 3-month commissioning services have no planned date
       const planned = (months === 3 || !(prev && prev.date))
         ? "" : addMonthsISO(prev.date, months - prev.months);
-      tb.append(h("tr", {},
+      const cells = [
         h("td", {}, r.name),
         h("td", { class: "svc-planned" }, planned ? fmtDate(planned) : "—"),
-        h("td", { class: "svc-done" }, dateCell(r, drawTab),
-          (!r.date && r.detail) ? h("span", { class: "svc-note" }, r.detail) : null)));
+      ];
+      if (startCol) {
+        cells.push(h("td", { class: "svc-start" },
+          (months >= 102 && !r.date)
+            ? dateEditor({ id: r.id, date: r.starts_on, name: r.name + " — start" },
+                { field: "starts_on", label: r.name + " — start date",
+                  onSaved: (d) => { r.starts_on = d; drawTab(); } })
+            : "—"));
+      }
+      cells.push(h("td", { class: "svc-done" }, dateCell(r, drawTab),
+        (!r.date && r.detail) ? h("span", { class: "svc-note" }, r.detail) : null));
+      tb.append(h("tr", {}, ...cells));
       prev = { months, date: r.date };
     }
+    const headCells = [h("th", {}, "Service"), h("th", {}, "Planned")];
+    if (startCol) headCells.push(h("th", {}, "Start date"));
+    headCells.push(h("th", {}, "Completed"));
     card.append(h("div", { class: "svc-scroll" },
       h("table", { class: "svc-table" },
-        h("thead", {}, h("tr", {},
-          h("th", {}, "Service"), h("th", {}, "Planned"), h("th", {}, "Completed"))),
+        h("thead", {}, h("tr", {}, ...headCells)),
         tb)));
     wrap.append(card);
     if (!svc.length) { clear(card); card.append(h("div", { class: "empty-state" }, "No service dates recorded for this turbine.")); }
@@ -1553,12 +1615,17 @@ async function viewPlanning() {   /* Notification Request */
     ats.disabled = readOnly;
     ats.addEventListener("change", () => saveField(n, "ats_case", ats.value));
 
+    const son = h("input", { type: "text", placeholder: "Service Order Number (optional)", value: team.son || "" });
+    son.disabled = readOnly;
+    son.addEventListener("change", () => saveField(n, "son", son.value));
+
     card.append(
       h("div", { class: "notif-fields" },
         h("label", { class: "notif-lbl" }, "Contract type", ct.sel),
         h("label", { class: "notif-lbl" }, "Turbine", turb.sel),
         h("label", { class: "notif-lbl wide" }, "Description", desc),
-        h("label", { class: "notif-lbl wide" }, "ATS Case", ats)));
+        h("label", { class: "notif-lbl" }, "ATS Case", ats),
+        h("label", { class: "notif-lbl" }, "SON", son)));
     return card;
   }
 
@@ -1581,6 +1648,7 @@ async function viewPlanning() {   /* Notification Request */
   }
 
   function draw() {
+    const keepY = window.scrollY;      // rebuilding the board must not jump the page
     dateInput.value = planDate;
 
     /* rail */
@@ -1614,7 +1682,7 @@ async function viewPlanning() {   /* Notification Request */
       && (!last || last.members.length > 0);
     if (showNew) {
       board.append(teamCard({ team_no: nextNo, members: [], asset_id: null, contract_type: null,
-        description: "", ats_case: "" }, true));
+        description: "", ats_case: "", son: "" }, true));
     } else if (!teams.length) {
       board.append(h("div", { class: "empty-state" },
         readOnly ? "No notification requests for this date."
@@ -1622,6 +1690,7 @@ async function viewPlanning() {   /* Notification Request */
     }
 
     renderBar();
+    if (window.scrollY !== keepY) window.scrollTo(0, keepY);
   }
 
   function renderBar() {
@@ -1865,6 +1934,7 @@ async function viewRoster() {
 
   const wrap = h("div", {});
   function draw() {
+    const keepY = window.scrollY;
     clear(wrap);
     const head = h("div", { class: "cal-head" },
       h("button", { class: "cal-nav", onclick: () => { shiftMonth(-1); reload(); } }, "‹"),
@@ -1893,6 +1963,7 @@ async function viewRoster() {
 
     if (scope === "team") wrap.append(layout === "grid" ? teamGrid() : teamCalendar());
     else { wrap.append(techCalendar()); if (data.totals) wrap.append(banner()); }
+    if (window.scrollY !== keepY) window.scrollTo(0, keepY);
   }
 
   root.replaceChildren(shell("roster",
@@ -1919,11 +1990,29 @@ async function bootstrap() {
     const me = await api("/auth/me");
     State.user = me.user;
     State.modules = (await api("/modules")).modules;
+    maybeReviewPrompt();          // admins: nag about un-reviewed pendings, once per app entry
     return true;
   } catch (_) {
     State.token = null; localStorage.removeItem("ops_token");
     return false;
   }
+}
+
+async function maybeReviewPrompt() {
+  if (!State.user || State.user.role !== "ADMIN") return;
+  let n = 0;
+  try { n = (await api("/pendings/review-count")).submitted; } catch (_) { return; }
+  if (!n) return;
+  const backdrop = h("div", { class: "modal-backdrop" });
+  const close = () => backdrop.remove();
+  backdrop.append(h("div", { class: "modal" },
+    h("h3", {}, n + " pending " + (n === 1 ? "entry" : "entries") + " to review"),
+    h("p", {}, "New observations are waiting for a review and a priority."),
+    h("div", { class: "btn-row", style: "justify-content:flex-end;margin-top:1rem" },
+      h("button", { class: "btn ghost", onclick: close }, "Later"),
+      h("button", { class: "btn primary", onclick: () => { close(); navigate("#/pendings?status=SUBMITTED"); } }, "Review now"))));
+  backdrop.addEventListener("click", e => { if (e.target === backdrop) close(); });
+  document.body.append(backdrop);
 }
 
 async function render() {

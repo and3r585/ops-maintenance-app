@@ -226,6 +226,7 @@ CREATE TABLE IF NOT EXISTS asset_records (
     category    TEXT NOT NULL,          -- 'service' | 'retrofit' | 'component'
     name        TEXT NOT NULL,
     occurred_on TEXT,                   -- ISO date, or NULL if not recorded
+    starts_on   TEXT,                   -- planned start date for an upcoming service (cleared once completed)
     detail      TEXT,
     status      TEXT,                   -- retrofits: 'complete' | 'in_progress' | 'outstanding'
     sort        INTEGER NOT NULL DEFAULT 0
@@ -257,6 +258,7 @@ CREATE TABLE IF NOT EXISTS notif_request (
     contract_type TEXT,
     description   TEXT,
     ats_case      TEXT,
+    son           TEXT,                 -- optional Service Order Number
     submitted_at  TEXT,
     submitted_by  INTEGER REFERENCES users(id),
     history_id    INTEGER,
@@ -288,6 +290,9 @@ CREATE TABLE IF NOT EXISTS pending_entries (
     completed_note TEXT,
     completed_by   INTEGER REFERENCES users(id),
     completed_at   TEXT,
+    -- last add-on (part / photo) made while REVIEWED
+    updated_by     INTEGER REFERENCES users(id),
+    updated_at     TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -295,7 +300,9 @@ CREATE TABLE IF NOT EXISTS pending_parts (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     pending_entry_id  INTEGER NOT NULL REFERENCES pending_entries(id),
     part_number       TEXT NOT NULL,
-    quantity          TEXT NOT NULL
+    quantity          TEXT NOT NULL,
+    added_by          INTEGER REFERENCES users(id),
+    added_at          TEXT
 );
 
 CREATE TABLE IF NOT EXISTS pending_photos (
@@ -303,7 +310,8 @@ CREATE TABLE IF NOT EXISTS pending_photos (
     pending_entry_id  INTEGER NOT NULL REFERENCES pending_entries(id),
     filename          TEXT NOT NULL,
     caption           TEXT,
-    kind              TEXT NOT NULL DEFAULT 'note',   -- 'note' | 'evidence'
+    kind              TEXT NOT NULL DEFAULT 'note',   -- 'note' | 'reviewed' | 'evidence'
+    added_by          INTEGER REFERENCES users(id),
     created_at        TEXT NOT NULL
 );
 
@@ -372,6 +380,18 @@ def seed():
     # --- migration: mark where an asset_history row came from ('import' | 'notification') ---
     if "source" not in [r["name"] for r in conn.execute("PRAGMA table_info(asset_history)")]:
         conn.execute("ALTER TABLE asset_history ADD COLUMN source TEXT")
+
+    # --- migration: additive columns (idempotent) ---
+    def _addcol(table, col, decl):
+        if col not in [r["name"] for r in conn.execute("PRAGMA table_info(%s)" % table)]:
+            conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, col, decl))
+    _addcol("asset_records", "starts_on", "TEXT")
+    _addcol("notif_request", "son", "TEXT")
+    _addcol("pending_parts", "added_by", "INTEGER")
+    _addcol("pending_parts", "added_at", "TEXT")
+    _addcol("pending_photos", "added_by", "INTEGER")
+    _addcol("pending_entries", "updated_by", "INTEGER")
+    _addcol("pending_entries", "updated_at", "TEXT")
 
     # --- migration: widen the users.role CHECK to allow the read-only 'VIEW' role ---
     udef = conn.execute(
@@ -1060,10 +1080,11 @@ class Handler(BaseHTTPRequestHandler):
             self._require(conn)
             want = (query.get("status", [""])[0] or "").upper()
             sql = ("SELECT p.*, a.tag AS turbine, u.display_name AS author_name, "
-                   "cu.display_name AS completed_by_name "
+                   "cu.display_name AS completed_by_name, uu.display_name AS updated_by_name "
                    "FROM pending_entries p JOIN assets a ON a.id = p.asset_id "
                    "JOIN users u ON u.id = p.author_id "
-                   "LEFT JOIN users cu ON cu.id = p.completed_by")
+                   "LEFT JOIN users cu ON cu.id = p.completed_by "
+                   "LEFT JOIN users uu ON uu.id = p.updated_by")
             args = []
             if want in ("SUBMITTED", "REVIEWED", "COMPLETED"):
                 sql += " WHERE p.status = ?"
@@ -1074,15 +1095,23 @@ class Handler(BaseHTTPRequestHandler):
             by_id = {r["id"]: r for r in rows}
             for r in rows:
                 r["parts"], r["photos"] = [], []
-            for pt in conn.execute("SELECT pending_entry_id, part_number, quantity FROM pending_parts"):
+            for pt in conn.execute(
+                "SELECT pt.pending_entry_id, pt.part_number, pt.quantity, pt.added_at, "
+                "au.display_name AS added_by_name FROM pending_parts pt "
+                "LEFT JOIN users au ON au.id = pt.added_by ORDER BY pt.id"):
                 if pt["pending_entry_id"] in by_id:
                     by_id[pt["pending_entry_id"]]["parts"].append(
-                        {"part_number": pt["part_number"], "quantity": pt["quantity"]})
-            for ph in conn.execute("SELECT pending_entry_id, filename, kind FROM pending_photos"):
+                        {"part_number": pt["part_number"], "quantity": pt["quantity"],
+                         "added_at": pt["added_at"], "added_by_name": pt["added_by_name"]})
+            for ph in conn.execute(
+                "SELECT ph.pending_entry_id, ph.filename, ph.kind, ph.created_at, "
+                "au.display_name AS added_by_name FROM pending_photos ph "
+                "LEFT JOIN users au ON au.id = ph.added_by ORDER BY ph.id"):
                 if ph["pending_entry_id"] in by_id:
                     by_id[ph["pending_entry_id"]]["photos"].append(
                         {"url": photo_url(ph["filename"]),
-                         "thumb": photo_thumb_url(ph["filename"]), "kind": ph["kind"]})
+                         "thumb": photo_thumb_url(ph["filename"]), "kind": ph["kind"],
+                         "created_at": ph["created_at"], "added_by_name": ph["added_by_name"]})
             counts = {s: 0 for s in ("SUBMITTED", "REVIEWED", "COMPLETED")}
             for r in conn.execute("SELECT status, COUNT(*) c FROM pending_entries GROUP BY status"):
                 counts[r["status"]] = r["c"]
@@ -1143,7 +1172,7 @@ class Handler(BaseHTTPRequestHandler):
                              (date, team_no, data.get("tech_id")))
             elif op == "set_field":
                 field = data.get("field")
-                if field not in ("asset_id", "contract_type", "description", "ats_case"):
+                if field not in ("asset_id", "contract_type", "description", "ats_case", "son"):
                     raise ApiError(400, "Unknown field")
                 val = data.get("value")
                 if field == "asset_id":
@@ -1290,7 +1319,7 @@ class Handler(BaseHTTPRequestHandler):
             if not asset:
                 raise ApiError(404, "Asset not found")
             recs = conn.execute(
-                "SELECT id, category, name, occurred_on AS date, detail, status, sort FROM asset_records "
+                "SELECT id, category, name, occurred_on AS date, starts_on, detail, status, sort FROM asset_records "
                 "WHERE asset_id = ? ORDER BY sort, name", (parts[1],),
             ).fetchall()
             history = conn.execute(
@@ -1358,17 +1387,25 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(404, "Record not found")
             if rec["category"] not in ("service", "blade", "hv", "retrofit"):
                 raise ApiError(403, "This record type is not editable")
-            raw = (self._json_body().get("occurred_on") or "").strip()
+            body = self._json_body()
+            field = "starts_on" if "starts_on" in body else "occurred_on"
+            raw = (body.get(field) or "").strip()
             iso = None
             if raw:
                 m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", raw)
                 if not m:
                     raise ApiError(400, "Date must be YYYY-MM-DD")
-                y = int(m.group(1))
-                if not (2005 <= y <= 2040):
+                if not (2005 <= int(m.group(1)) <= 2040):
                     raise ApiError(400, "Date out of range")
                 iso = raw
-            old = rec["occurred_on"]
+            old = rec[field]
+
+            if field == "starts_on":
+                conn.execute("UPDATE asset_records SET starts_on = ? WHERE id = ?", (iso, parts[1]))
+                if (old or None) != (iso or None):
+                    log_record_change(conn, rec, "starts_on", old, iso, user["id"])
+                return 200, {"ok": True, "starts_on": iso}
+
             if rec["category"] == "retrofit":
                 # entering a date completes the retrofit; clearing it reopens it
                 new_status = "complete" if iso else "outstanding"
@@ -1379,7 +1416,10 @@ class Handler(BaseHTTPRequestHandler):
                 if rec["status"] != new_status:
                     log_record_change(conn, rec, "status", rec["status"], new_status, user["id"])
                 return 200, {"ok": True, "occurred_on": iso, "status": new_status}
-            conn.execute("UPDATE asset_records SET occurred_on = ? WHERE id = ?", (iso, parts[1]))
+            # a completed service has no planned start date any more
+            conn.execute("UPDATE asset_records SET occurred_on = ?, "
+                         "starts_on = CASE WHEN ? IS NOT NULL THEN NULL ELSE starts_on END WHERE id = ?",
+                         (iso, iso, parts[1]))
             if (old or None) != (iso or None):
                 log_record_change(conn, rec, "occurred_on", old, iso, user["id"])
             return 200, {"ok": True, "occurred_on": iso}
@@ -1394,6 +1434,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._create_pending(conn, asset_id, user)
 
         # --- pendings ---
+        if parts == ["pendings", "review-count"] and method == "GET":
+            self._require(conn)
+            n = conn.execute(
+                "SELECT COUNT(*) c FROM pending_entries WHERE status = 'SUBMITTED'"
+            ).fetchone()["c"]
+            return 200, {"submitted": n}
+
         if parts == ["pendings", "export"] and method == "GET":
             self._require(conn)
             want = (query.get("status", [""])[0] or "").upper()
@@ -1468,7 +1515,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # admin reserves parts while an entry is Reviewed
         if len(parts) == 3 and parts[0] == "pendings" and parts[2] == "parts" and method == "POST":
-            self._require(conn, "ADMIN")
+            user = self._require(conn, "ADMIN")
             row = conn.execute("SELECT status FROM pending_entries WHERE id = ?", (parts[1],)).fetchone()
             if not row:
                 raise ApiError(404, "Pending entry not found")
@@ -1486,11 +1533,36 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(400, "At least one part number is required")
             conn.execute("DELETE FROM pending_parts WHERE pending_entry_id = ?", (parts[1],))
             for pn, qty in rows:
-                conn.execute("INSERT INTO pending_parts (pending_entry_id,part_number,quantity) "
-                             "VALUES (?,?,?)", (parts[1], pn, qty))
+                conn.execute("INSERT INTO pending_parts (pending_entry_id,part_number,quantity,added_by,added_at) "
+                             "VALUES (?,?,?,?,?)", (parts[1], pn, qty, user["id"], now()))
             conn.execute("UPDATE pending_entries SET parts_service_order = ?, parts_reserved_at = ? "
                          "WHERE id = ?", (so or None, now(), parts[1]))
             return 200, {"ok": True}
+
+        # admin OR technician adds a photo and/or a part to a Reviewed entry
+        if len(parts) == 3 and parts[0] == "pendings" and parts[2] == "addition" and method == "POST":
+            user = self._require(conn, ("ADMIN", "TECHNICIAN"))
+            row = conn.execute("SELECT status FROM pending_entries WHERE id = ?", (parts[1],)).fetchone()
+            if not row:
+                raise ApiError(404, "Pending entry not found")
+            if row["status"] != "REVIEWED":
+                raise ApiError(409, "Photos and parts can only be added while the entry is Reviewed")
+            fields, files = self._multipart()
+            if fields is None:
+                raise ApiError(400, "Expected a multipart form")
+            pn = (fields.get("part_number") or "").strip()
+            qty = (fields.get("quantity") or "").strip()
+            has_photo = any(f["content"] for f in (files or []))
+            if not pn and not has_photo:
+                raise ApiError(400, "Add a photo, a part number, or both")
+            saved = self._save_photos(conn, int(parts[1]), files, "reviewed", added_by=user["id"])
+            if pn:
+                conn.execute(
+                    "INSERT INTO pending_parts (pending_entry_id,part_number,quantity,added_by,added_at) "
+                    "VALUES (?,?,?,?,?)", (parts[1], pn, qty or "1", user["id"], now()))
+            conn.execute("UPDATE pending_entries SET updated_by = ?, updated_at = ? WHERE id = ?",
+                         (user["id"], now(), parts[1]))
+            return 200, {"ok": True, "photos": saved, "part": bool(pn)}
 
         # technician (or admin) completes a Reviewed entry with mandatory evidence
         if len(parts) == 3 and parts[0] == "pendings" and parts[2] == "complete" and method == "POST":
@@ -1696,7 +1768,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(400, "Missing multipart boundary")
         return parse_multipart(self._body(), m.group(1).strip('"'))
 
-    def _save_photos(self, conn, entry_id, files, kind="note", limit=8):
+    def _save_photos(self, conn, entry_id, files, kind="note", limit=8, added_by=None):
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         saved = 0
         for f in files or []:
@@ -1713,8 +1785,8 @@ class Handler(BaseHTTPRequestHandler):
                 with open(os.path.join(UPLOAD_DIR, thumb_name(fname)), "wb") as out:
                     out.write(thumb_bytes)
             conn.execute(
-                "INSERT INTO pending_photos (pending_entry_id,filename,caption,kind,created_at) "
-                "VALUES (?,?,?,?,?)", (entry_id, fname, "", kind, now()),
+                "INSERT INTO pending_photos (pending_entry_id,filename,caption,kind,added_by,created_at) "
+                "VALUES (?,?,?,?,?,?)", (entry_id, fname, "", kind, added_by, now()),
             )
             saved += 1
         return saved
@@ -1953,7 +2025,7 @@ def _notif_teams(conn, date):
             "team_no": r["team_no"], "request_id": r["id"],
             "asset_id": r["asset_id"], "asset_tag": r["asset_tag"],
             "contract_type": r["contract_type"], "description": r["description"],
-            "ats_case": r["ats_case"], "submitted_at": r["submitted_at"],
+            "ats_case": r["ats_case"], "son": r["son"], "submitted_at": r["submitted_at"],
             "members": by_team.get(r["team_no"], []),
         })
     return out
@@ -2040,7 +2112,7 @@ def _notif_export_rows(conn, date):
             d, NOTIF_HUB, NOTIF_SITE, turbine,
             "", "", t["contract_type"], "",
             (t["description"] or "").strip(), (t["ats_case"] or "").strip(),
-            "", "", *names,
+            "", (t["son"] or "").strip(), *names,      # SON -> SGRE SERVICE ORDER NUMBER
         ])
     return rows
 
@@ -2064,7 +2136,8 @@ def _notif_submit(conn, date):
             conn.execute(
                 "INSERT INTO asset_history (asset_id, occurred_on, description, work_type, "
                 "service_order, technicians, source) VALUES (?,?,?,?,?,?,'notification')",
-                (t["asset_id"], date, desc, t["contract_type"], None, techs))
+                (t["asset_id"], date, desc, t["contract_type"],
+                 (t["son"] or "").strip() or None, techs))
             filed += 1
     conn.execute("DELETE FROM notif_member WHERE plan_date=?", (date,))
     conn.execute("DELETE FROM notif_request WHERE plan_date=?", (date,))
@@ -2124,9 +2197,11 @@ def service_worklist(conn):
 
 def load_pendings(conn, asset_id):
     rows = conn.execute(
-        "SELECT p.*, u.display_name AS author_name, cu.display_name AS completed_by_name "
+        "SELECT p.*, u.display_name AS author_name, cu.display_name AS completed_by_name, "
+        "uu.display_name AS updated_by_name "
         "FROM pending_entries p JOIN users u ON u.id = p.author_id "
         "LEFT JOIN users cu ON cu.id = p.completed_by "
+        "LEFT JOIN users uu ON uu.id = p.updated_by "
         "WHERE p.asset_id = ? "
         "ORDER BY CASE p.status WHEN 'SUBMITTED' THEN 0 WHEN 'REVIEWED' THEN 1 ELSE 2 END, "
         "p.created_at DESC",
@@ -2135,17 +2210,22 @@ def load_pendings(conn, asset_id):
     out = []
     for r in rows:
         photos = conn.execute(
-            "SELECT id, filename, caption, kind FROM pending_photos "
-            "WHERE pending_entry_id = ? ORDER BY id", (r["id"],),
+            "SELECT ph.id, ph.filename, ph.caption, ph.kind, ph.created_at, "
+            "au.display_name AS added_by_name "
+            "FROM pending_photos ph LEFT JOIN users au ON au.id = ph.added_by "
+            "WHERE ph.pending_entry_id = ? ORDER BY ph.id", (r["id"],),
         ).fetchall()
         parts = conn.execute(
-            "SELECT part_number, quantity FROM pending_parts WHERE pending_entry_id = ? ORDER BY id",
-            (r["id"],),
+            "SELECT pt.part_number, pt.quantity, pt.added_at, au.display_name AS added_by_name "
+            "FROM pending_parts pt LEFT JOIN users au ON au.id = pt.added_by "
+            "WHERE pt.pending_entry_id = ? ORDER BY pt.id", (r["id"],),
         ).fetchall()
         d = dict(r)
         d["photos"] = [{"id": p["id"], "url": photo_url(p["filename"]),
                         "thumb": photo_thumb_url(p["filename"]),
-                        "caption": p["caption"], "kind": p["kind"]} for p in photos]
+                        "caption": p["caption"], "kind": p["kind"],
+                        "added_by_name": p["added_by_name"],
+                        "created_at": p["created_at"]} for p in photos]
         d["parts"] = [dict(p) for p in parts]
         out.append(d)
     return out

@@ -269,6 +269,7 @@ textarea { resize: vertical; min-height: 90px; }
 .svc-table tbody tr:last-child td { border-bottom: none; }
 .svc-table td:first-child { font-weight: 550; white-space: normal; }
 .svc-table td.svc-planned { color: var(--text-soft); font-variant-numeric: tabular-nums; }
+.svc-table td.svc-start { white-space: nowrap; color: var(--text-soft); }
 .svc-table td.svc-done { text-align: right; padding-right: 0; }
 .svc-note { display: block; font-size: .78rem; color: var(--text-soft); font-style: italic; }
 
@@ -656,8 +657,10 @@ select.cal-sel.r-sick, select.cal-sel.r-abs { color: var(--danger); }
 .evidence-box { border-color: rgba(107,142,107,.4); }
 .parts-title { display: flex; align-items: center; gap: .5rem; font-weight: 650; font-size: .85rem; margin-bottom: .35rem; }
 .parts-list { display: flex; flex-direction: column; gap: .2rem; }
-.part-line { display: flex; justify-content: space-between; font-size: .84rem; padding: .18rem 0; border-top: 1px solid var(--border); }
+.part-line { display: flex; align-items: baseline; gap: .5rem; font-size: .84rem; padding: .18rem 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
 .part-line:first-child { border-top: none; }
+.part-line .pl-num { flex: 1; }
+.part-line .hint { flex-basis: 100%; margin: 0; }
 .pl-num { font-family: ui-monospace, Menlo, monospace; }
 .pl-qty { color: var(--text-soft); font-weight: 600; }
 
