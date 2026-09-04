@@ -67,6 +67,7 @@ const badge = (value) => h("span", { class: "badge dot b-" + value }, String(val
 const fmtDate = (s) => s ? new Date(s).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "—";
 const fmtWhen = (s) => s ? new Date(s).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
 const esc = (s) => String(s == null ? "" : s);
+const serviceMonth = (n) => { const m = /^(\d+)\s*month/i.exec(n || ""); return m ? +m[1] : null; };
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const addDaysISO = (iso, days) => {
   const d = new Date(iso + "T00:00:00Z");
@@ -545,7 +546,8 @@ async function viewDashboard() {
       .map(([s, c]) => `${c} ${s.toLowerCase()}`).join(" · ") || "None", "#/pendings");
   const next0 = (d.next_services || [])[0];
   const svcCard = kpi(d.service_count, "Turbines with a service outstanding",
-    next0 ? "Soonest: " + next0.tag + " " + next0.name + (next0.planned ? " · " + fmtDate(next0.planned) : "") : "—",
+    next0 ? "Soonest: " + next0.tag + " " + next0.name
+      + (next0.planned ? " · " + (next0.starts_on ? "Started · " : "") + fmtDate(next0.planned) : "") : "—",
     "#/services");
   const retroCard = kpi(d.incomplete_retrofit_count, "Retrofit items not completed",
     `${(d.incomplete_retrofits || []).length} campaigns affected`, "#/retrofits");
@@ -591,8 +593,8 @@ function serviceRows(list) {
       onclick: () => navigate("#/asset/" + s.asset_id + "?tab=Service%20dates") },
       h("div", { class: "rec-name" }, s.tag,
         h("span", { class: "hint", style: "margin-left:.5rem;font-weight:400" }, s.name)),
-      h("span", { class: "rec-date " + (dd == null ? "muted" : dd < 0 ? "out" : dd <= 30 ? "wip" : "") },
-        s.planned ? fmtDate(s.planned) : "—")));
+      h("span", { class: "rec-date " + (s.starts_on ? "wip" : dd == null ? "muted" : dd < 0 ? "out" : dd <= 30 ? "wip" : "") },
+        (s.starts_on ? "Started · " : "") + (s.planned ? fmtDate(s.planned) : "—"))));
   }
   return wrap;
 }
@@ -647,34 +649,44 @@ async function viewServicesList() {
   const isAdmin = State.user.role === "ADMIN";
   const reload = () => viewServicesList();
 
+  const startCol = list.some(s => serviceMonth(s.name) >= 102);
   const card = h("div", { class: "card" },
     h("h3", {}, "Service completions"),
     h("p", { class: "hint", style: "margin:-.2rem 0 .8rem" },
       list.length
         ? `${list.length} turbines with a service outstanding, soonest first.`
-          + (isAdmin ? " Set a completion date here — it writes to the turbine's record." : "")
+          + (isAdmin ? " Set a completion date here — it writes to the turbine's record."
+            + (startCol ? " A planned start date can be set on 102-month services and up." : "") : "")
         : "Every turbine's services are up to date."));
   if (list.length) {
     const tb = h("tbody", {});
     for (const s of list) {
       const dd = s.planned ? Math.round((new Date(s.planned) - new Date()) / 86400000) : null;
-      tb.append(h("tr", {},
+      const cells = [
         h("td", {}, h("a", { href: "#/asset/" + s.asset_id + "?tab=Service%20dates" }, s.tag)),
         h("td", {}, s.name),
         h("td", { class: "svc-planned" }, s.planned
           ? h("span", dd < 0 ? { style: "color:var(--danger)" } : {},
-              fmtDate(s.planned) + (dd < 0 ? ` · ${-dd}d overdue` : dd <= 30 ? ` · in ${dd}d` : ""))
-          : "—"),
-        h("td", { class: "svc-done" }, dateEditor(
-          { id: s.record_id, date: "", name: s.tag + " " + s.name },
-          { label: s.tag + " · " + s.name, onSaved: reload }))));
+              (s.starts_on ? "Started · " : "") + fmtDate(s.planned)
+              + (dd < 0 ? ` · ${-dd}d overdue` : dd <= 30 ? ` · in ${dd}d` : ""))
+          : (s.starts_on ? "Started" : "—")),
+      ];
+      if (startCol) {
+        cells.push(h("td", { class: "svc-start" }, serviceMonth(s.name) >= 102
+          ? dateEditor({ id: s.record_id, date: s.starts_on, name: s.tag + " " + s.name + " — start" },
+              { field: "starts_on", label: s.tag + " · " + s.name + " — start date", onSaved: reload })
+          : "—"));
+      }
+      cells.push(h("td", { class: "svc-done" }, dateEditor(
+        { id: s.record_id, date: "", name: s.tag + " " + s.name },
+        { label: s.tag + " · " + s.name, onSaved: reload })));
+      tb.append(h("tr", {}, ...cells));
     }
+    const headCells = [h("th", {}, "Turbine"), h("th", {}, "Service"), h("th", {}, "Planned")];
+    if (startCol) headCells.push(h("th", {}, "Start date"));
+    headCells.push(h("th", {}, "Completed"));
     card.append(h("div", { class: "svc-scroll" },
-      h("table", { class: "svc-table" },
-        h("thead", {}, h("tr", {},
-          h("th", {}, "Turbine"), h("th", {}, "Service"),
-          h("th", {}, "Planned"), h("th", {}, "Completed"))),
-        tb)));
+      h("table", { class: "svc-table" }, h("thead", {}, h("tr", {}, ...headCells)), tb)));
   }
   root.replaceChildren(shell("dashboard",
     h("div", { class: "crumb" }, h("a", { href: "#/dashboard" }, "← Dashboard")),
@@ -1113,10 +1125,10 @@ async function viewAsset(id) {
     let dueClass = "muted";
     if (ns && ns.planned) {
       const days = Math.round((new Date(ns.planned) - new Date()) / 86400000);
-      dueNote = days < 0 ? `Overdue by ${-days} days`
+      dueNote = (ns.starts_on ? "Started · " : "") + (days < 0 ? `Overdue by ${-days} days`
         : days === 0 ? "Due today"
-        : `In ${days} day${days === 1 ? "" : "s"}`;
-      dueClass = days < 0 ? "overdue" : days <= 30 ? "soon" : "ok";
+        : `In ${days} day${days === 1 ? "" : "s"}`);
+      dueClass = ns.starts_on ? "soon" : days < 0 ? "overdue" : days <= 30 ? "soon" : "ok";
     }
     return h("div", { class: "grid cols-2" },
       h("div", { class: "card" }, h("h3", {}, "Identification"),
@@ -1130,7 +1142,8 @@ async function viewAsset(id) {
       h("div", { class: "card next-svc " + dueClass, style: "grid-column:1/-1" },
         h("h3", {}, "Next service due"),
         h("div", { class: "next-svc-body" },
-          h("div", { class: "next-svc-date" }, ns && ns.planned ? fmtDate(ns.planned) : "—"),
+          h("div", { class: "next-svc-date" },
+            (ns && ns.starts_on ? "Started · " : "") + (ns && ns.planned ? fmtDate(ns.planned) : "—")),
           h("div", { class: "next-svc-note" }, dueNote)),
         h("p", { class: "hint", style: "margin:.6rem 0 0" },
           ns ? ns.name + " — planned from the previous completion + interval"

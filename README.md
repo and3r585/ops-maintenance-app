@@ -103,15 +103,18 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   Visible to everyone. Its three drill-downs — **`#/pendings`**, **`#/services`**,
   **`#/retrofits`** — let an **admin edit completion dates in place**: on the *Service
   completions* list, adding a date to a turbine's next service records it and the row
-  advances to the following service; the *Retrofit completions* list groups items by
-  campaign — each campaign collapses/expands (with an **Expand all** toggle) and adding a
-  date to a turbine closes that campaign out for it. Every edit goes through the approval
-  modal, writes to `asset_records` via `PATCH /api/records/:id`, and shows up everywhere
-  that reads it (the asset's own tabs, the Data Explorer, the change log).
+  advances to the following service; a **Start date** can also be set there on any
+  102-month-and-up service, the same as on the asset's Service dates tab. The *Retrofit
+  completions* list groups items by campaign — each campaign collapses/expands (with an
+  **Expand all** toggle) and adding a date to a turbine closes that campaign out for it.
+  Every edit goes through the approval modal, writes to `asset_records` via `PATCH
+  /api/records/:id`, and shows up everywhere that reads it (the asset's own tabs, the
+  Data Explorer, the change log).
   - *Next service due* (dashboard + the asset Details card + `#/services`) = the first
     service with no completion date that falls after the last completed one; its **planned**
     date is the last completion + the interval between the two (72→84 is +12 months, the
-    rest +6), or the install date + months when nothing is done yet.
+    rest +6), or the install date + months when nothing is done yet. If a start date has
+    been set on it, the due date reads **"Started · &lt;date&gt;"**.
 - **Data Explorer (admin only)** — two tools in one page:
   - *Bulk table* — pick any asset tab (Service dates, HV history, Stat history, Retrofits,
     Blades, Components) and get one table with a row per turbine and a column per record.

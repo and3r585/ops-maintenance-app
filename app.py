@@ -2159,7 +2159,8 @@ def next_service(svc_records, install_date):
         m = _service_month(s["name"])
         if m is not None:                   # the 5-year oil exchange is not in the sequence
             seq.append({"id": s.get("id"), "name": s["name"], "month": m,
-                        "date": s.get("date") or s.get("occurred_on")})
+                        "date": s.get("date") or s.get("occurred_on"),
+                        "starts_on": s.get("starts_on")})
     seq.sort(key=lambda s: s["month"])
     completed = [s for s in seq if s["date"]]
     last_m = completed[-1]["month"] if completed else 0
@@ -2171,21 +2172,23 @@ def next_service(svc_records, install_date):
     base = last_date or install_date
     planned = add_months(base, interval) if base else None
     return {"record_id": nxt["id"], "name": nxt["name"], "planned": planned,
-            "overdue": bool(planned and planned < today())}
+            "overdue": bool(planned and planned < today()),
+            "starts_on": nxt.get("starts_on")}
 
 
 def service_worklist(conn):
     """One row per turbine: its next incomplete service, ready to complete from the
     dashboard drill-down."""
     rows = conn.execute(
-        "SELECT r.id, r.name, r.occurred_on, a.id AS asset_id, a.tag, a.install_date "
+        "SELECT r.id, r.name, r.occurred_on, r.starts_on, a.id AS asset_id, a.tag, a.install_date "
         "FROM asset_records r JOIN assets a ON a.id = r.asset_id WHERE r.category = 'service'"
     ).fetchall()
     by_asset = {}
     for r in rows:
         g = by_asset.setdefault(r["asset_id"],
                                 {"tag": r["tag"], "install": r["install_date"], "svc": []})
-        g["svc"].append({"id": r["id"], "name": r["name"], "occurred_on": r["occurred_on"]})
+        g["svc"].append({"id": r["id"], "name": r["name"], "occurred_on": r["occurred_on"],
+                         "starts_on": r["starts_on"]})
     out = []
     for aid, info in by_asset.items():
         n = next_service(info["svc"], info["install"])
