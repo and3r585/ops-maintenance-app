@@ -1845,10 +1845,13 @@ async function viewPlanning() {   /* Notification Request */
       outboxBox.append(h("p", { class: "sub" }, "Couldn't load submission history."));
       return;
     }
-    outboxBox.append(h("p", { class: "sub" }, outbox.webhook_configured
-      ? "Delivering automatically to the shared workbook."
-      : "No delivery webhook is configured yet — download each submission and paste it in, "
-        + "then mark it as done, or wait for automatic delivery to be switched on."));
+    const deliveryLabel = outbox.delivery_method === "webhook"
+      ? "Delivering automatically to the shared workbook (webhook)."
+      : outbox.delivery_method === "email"
+        ? "Delivering automatically to the shared workbook (by email)."
+        : "No delivery method is configured yet — download each submission and paste it in, "
+          + "then mark it as done, or wait for automatic delivery to be switched on.";
+    outboxBox.append(h("p", { class: "sub" }, deliveryLabel));
     if (!outbox.submissions.length) {
       outboxBox.append(h("p", { class: "sub" }, "Nothing submitted yet."));
       return;

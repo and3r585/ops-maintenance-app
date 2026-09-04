@@ -25,13 +25,16 @@ import mimetypes
 import os
 import re
 import secrets
+import smtplib
 import sqlite3
+import ssl
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
 import zipfile
+from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -291,8 +294,9 @@ CREATE TABLE IF NOT EXISTS notif_member (
 -- Notification Request outbox: on submit, one row per complete request is queued
 -- here so it can be delivered to the shared company workbook independently of the
 -- submit itself (decoupled — submit never blocks on the external system). A
--- background worker POSTs PENDING rows to $NOTIF_OUTBOX_WEBHOOK when configured;
--- until then they simply wait and an admin can mark them done by hand.
+-- background worker delivers PENDING rows via webhook or email when configured
+-- (see NOTIF_OUTBOX_* below); until then they simply wait and an admin can mark
+-- them done by hand.
 CREATE TABLE IF NOT EXISTS notif_outbox (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     submission_id TEXT NOT NULL,          -- one per Submit action (idempotency key)
@@ -1255,7 +1259,7 @@ class Handler(BaseHTTPRequestHandler):
             if op == "submit":
                 filed, cleared, submission_id = _notif_submit(conn, date, user)
                 conn.commit()
-                if submission_id and NOTIF_OUTBOX_WEBHOOK:
+                if submission_id and _outbox_delivery_method():
                     threading.Thread(target=deliver_outbox, daemon=True).start()
                 res = load_notif(conn, date)
                 res["filed"] = filed
@@ -1359,7 +1363,7 @@ class Handler(BaseHTTPRequestHandler):
             submissions = sorted(subs.values(), key=lambda s: s["created_at"], reverse=True)
             for s in submissions:
                 s["rows"].sort(key=lambda r: r["team_no"])
-            return 200, {"submissions": submissions, "webhook_configured": bool(NOTIF_OUTBOX_WEBHOOK)}
+            return 200, {"submissions": submissions, "delivery_method": _outbox_delivery_method()}
 
         if parts == ["notif", "outbox"] and method == "POST":
             self._require(conn, "ADMIN")
@@ -1374,7 +1378,7 @@ class Handler(BaseHTTPRequestHandler):
                     "UPDATE notif_outbox SET status='PENDING' "
                     "WHERE id IN (%s) AND status IN ('FAILED','SKIPPED')" % qmarks, ids)
                 conn.commit()
-                if NOTIF_OUTBOX_WEBHOOK:
+                if _outbox_delivery_method():
                     threading.Thread(target=deliver_outbox, daemon=True).start()
             elif op == "mark_sent":
                 conn.execute(
@@ -2237,14 +2241,41 @@ NOTIF_MAX_TEAMS = 30
 NOTIF_HUB = "SO5"           # matches the "Scott & Stuart" export ("SO5", letter O)
 NOTIF_SITE = "Kilgallioch"
 
-# Outbox delivery. Set NOTIF_OUTBOX_WEBHOOK to a URL (e.g. a Power Automate
-# "When an HTTP request is received" trigger that does "Add a row into a table")
-# and every submitted request is POSTed there as JSON; leave it unset and rows
-# just queue until an admin marks them done. NOTIF_OUTBOX_API_KEY, if set, is
-# sent as the X-Api-Key header so the receiver can reject anything else.
+# Outbox delivery — two interchangeable transports, tried in this order:
+#
+# 1. Webhook: set NOTIF_OUTBOX_WEBHOOK to a URL (e.g. a Power Automate "When an
+#    HTTP request is received" trigger that does "Add a row into a table") and
+#    every submitted request is POSTed there as JSON. NOTIF_OUTBOX_API_KEY, if
+#    set, is sent as the X-Api-Key header so the receiver can reject anything
+#    else. (Needs a Premium Power Automate connector and can run into your
+#    tenant's Data Loss Prevention policy — see 2 if that's blocked.)
+# 2. Email: set NOTIF_OUTBOX_SMTP_HOST + NOTIF_OUTBOX_EMAIL_TO and every
+#    request is emailed as a small JSON attachment to that address, subject
+#    prefixed "NOTIF_ROW" — pair with a mail rule that files matching mail
+#    into a folder, and a flow triggered on "When a new email arrives"
+#    watching that folder (standard Outlook connector, no Premium, no DLP
+#    conflict with Excel Online).
+#
+# Neither set: rows just queue until an admin marks them done by hand.
 NOTIF_OUTBOX_WEBHOOK = os.environ.get("NOTIF_OUTBOX_WEBHOOK", "").strip()
 NOTIF_OUTBOX_API_KEY = os.environ.get("NOTIF_OUTBOX_API_KEY", "").strip()
+NOTIF_OUTBOX_SMTP_HOST = os.environ.get("NOTIF_OUTBOX_SMTP_HOST", "").strip()
+NOTIF_OUTBOX_SMTP_PORT = int(os.environ.get("NOTIF_OUTBOX_SMTP_PORT", "587") or "587")
+NOTIF_OUTBOX_SMTP_USER = os.environ.get("NOTIF_OUTBOX_SMTP_USER", "").strip()
+NOTIF_OUTBOX_SMTP_PASS = os.environ.get("NOTIF_OUTBOX_SMTP_PASS", "").strip()
+NOTIF_OUTBOX_EMAIL_FROM = os.environ.get("NOTIF_OUTBOX_EMAIL_FROM", "").strip() or NOTIF_OUTBOX_SMTP_USER
+NOTIF_OUTBOX_EMAIL_TO = os.environ.get("NOTIF_OUTBOX_EMAIL_TO", "").strip()
+NOTIF_OUTBOX_EMAIL_SUBJECT_PREFIX = "NOTIF_ROW"
 NOTIF_OUTBOX_MAX_ATTEMPTS = 8
+
+
+def _outbox_delivery_method():
+    """Which transport is active, or None if rows just queue for manual review."""
+    if NOTIF_OUTBOX_WEBHOOK:
+        return "webhook"
+    if NOTIF_OUTBOX_SMTP_HOST and NOTIF_OUTBOX_EMAIL_TO:
+        return "email"
+    return None
 
 # Contract-type dropdown — mirrored from the "Lookups" sheet of the notification
 # request workbook (column "Contract Type").
@@ -2480,18 +2511,20 @@ def _notif_submit(conn, date, user=None):
 # shared workbook happens here, best-effort, and retries on its own schedule so
 # the external system being slow or down never blocks or fails a submit.
 
-def _outbox_deliver_row(row):
-    """POST one queued row to the configured webhook. Returns (ok, detail)."""
-    if not NOTIF_OUTBOX_WEBHOOK:
-        return False, "no NOTIF_OUTBOX_WEBHOOK configured"
-    body = json.dumps({
+def _outbox_row_payload(row):
+    return {
         "submission_id": row["submission_id"],
         "plan_date": row["plan_date"],
         "team_no": row["team_no"],
         "row": json.loads(row["payload"]),
         "cells": json.loads(row["cells"]),
         "columns": NOTIF_XLSX_HEADER,
-    }).encode("utf-8")
+    }
+
+
+def _outbox_deliver_row_webhook(row):
+    """POST one queued row to the configured webhook. Returns (ok, detail)."""
+    body = json.dumps(_outbox_row_payload(row)).encode("utf-8")
     req = urllib.request.Request(NOTIF_OUTBOX_WEBHOOK, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
     if NOTIF_OUTBOX_API_KEY:
@@ -2507,10 +2540,46 @@ def _outbox_deliver_row(row):
         return False, str(e) or e.__class__.__name__
 
 
+def _outbox_deliver_row_email(row):
+    """Email one queued row as a small JSON attachment. Returns (ok, detail).
+    Paired with a mail rule that files matching subjects into a folder, and a
+    flow triggered on new mail in that folder."""
+    msg = EmailMessage()
+    msg["Subject"] = "%s %s-%s" % (NOTIF_OUTBOX_EMAIL_SUBJECT_PREFIX, row["submission_id"], row["team_no"])
+    msg["From"] = NOTIF_OUTBOX_EMAIL_FROM
+    msg["To"] = NOTIF_OUTBOX_EMAIL_TO
+    msg.set_content(
+        "Notification Request row — plan date %s, team %s, %s.\n\n"
+        "See the attached JSON for the full row; this email can be deleted "
+        "once it's been picked up." % (row["plan_date"], row["team_no"], row["contract_type"] or ""))
+    msg.add_attachment(
+        json.dumps(_outbox_row_payload(row), indent=2).encode("utf-8"),
+        maintype="application", subtype="json",
+        filename="notification-%s-%s.json" % (row["submission_id"], row["team_no"]))
+    try:
+        with smtplib.SMTP(NOTIF_OUTBOX_SMTP_HOST, NOTIF_OUTBOX_SMTP_PORT, timeout=20) as s:
+            s.starttls(context=ssl.create_default_context())
+            if NOTIF_OUTBOX_SMTP_USER:
+                s.login(NOTIF_OUTBOX_SMTP_USER, NOTIF_OUTBOX_SMTP_PASS)
+            s.send_message(msg)
+        return True, "sent to %s" % NOTIF_OUTBOX_EMAIL_TO
+    except Exception as e:                                    # auth, timeout, DNS…
+        return False, str(e) or e.__class__.__name__
+
+
+def _outbox_deliver_row(row, method):
+    if method == "webhook":
+        return _outbox_deliver_row_webhook(row)
+    if method == "email":
+        return _outbox_deliver_row_email(row)
+    return False, "no delivery method configured"
+
+
 def deliver_outbox(limit=50):
     """Attempt delivery of PENDING / retryable FAILED rows. Safe to call from a
-    worker thread or right after a submit. No-op when no webhook is set."""
-    if not NOTIF_OUTBOX_WEBHOOK:
+    worker thread or right after a submit. No-op when no transport is set."""
+    method = _outbox_delivery_method()
+    if not method:
         return 0, 0
     conn = get_db()
     try:
@@ -2520,11 +2589,11 @@ def deliver_outbox(limit=50):
             (NOTIF_OUTBOX_MAX_ATTEMPTS, limit)).fetchall()
         sent = failed = 0
         for row in rows:
-            ok, detail = _outbox_deliver_row(row)
+            ok, detail = _outbox_deliver_row(row, method)
             if ok:
                 conn.execute(
-                    "UPDATE notif_outbox SET status='SENT', sent_at=?, sent_via='webhook', "
-                    "attempts=attempts+1, last_error=NULL WHERE id=?", (now(), row["id"]))
+                    "UPDATE notif_outbox SET status='SENT', sent_at=?, sent_via=?, "
+                    "attempts=attempts+1, last_error=NULL WHERE id=?", (now(), method, row["id"]))
                 sent += 1
             else:
                 conn.execute(
@@ -2538,7 +2607,7 @@ def deliver_outbox(limit=50):
 
 
 def _outbox_worker():
-    """Background retry loop. Started once from main() when a webhook is set."""
+    """Background retry loop. Started once from main() when a transport is set."""
     while True:
         time.sleep(120)
         try:
@@ -2699,7 +2768,7 @@ def main():
         "SELECT COUNT(*) c FROM notif_outbox WHERE status IN ('PENDING','FAILED')").fetchone()["c"]
     conn.close()
 
-    if NOTIF_OUTBOX_WEBHOOK:
+    if _outbox_delivery_method():
         threading.Thread(target=_outbox_worker, daemon=True).start()
         deliver_outbox()          # drain anything queued while the server was down
 
@@ -2719,10 +2788,13 @@ def main():
                                  else "Pillow NOT installed — photos stored as-is (pip install pillow)"))
     print("  note         app-entered data lives in data/ — plain `python3 app.py` keeps it;")
     print("               `--reset` deletes it. Nothing else wipes the DB.")
+    _outbox_desc = {
+        "webhook": "delivering via webhook to " + NOTIF_OUTBOX_WEBHOOK,
+        "email": "delivering via email to " + NOTIF_OUTBOX_EMAIL_TO,
+        None: "no delivery method set — rows queue for manual review",
+    }[_outbox_delivery_method()]
     print("  notif outbox %s%s" % (
-        ("delivering to " + NOTIF_OUTBOX_WEBHOOK) if NOTIF_OUTBOX_WEBHOOK
-        else "no NOTIF_OUTBOX_WEBHOOK set — rows queue for manual review",
-        (", %d queued" % n_outbox_pending) if n_outbox_pending else ""))
+        _outbox_desc, (", %d queued" % n_outbox_pending) if n_outbox_pending else ""))
     print("  stop         Ctrl-C\n")
     try:
         httpd.serve_forever()
