@@ -385,8 +385,10 @@ function pendingItem(p, opts) {
     box.append(
       h("label", {}, "Completion comment (required)"), comment,
       h("div", { class: "field", style: "margin-top:.5rem" },
-        h("label", {}, "Evidence photo (required)"), fileIn,
-        h("div", { class: "hint" }, "At least one photo. On a phone this opens the camera."), preview),
+        h("label", {}, "Evidence photo " + (isAdmin ? "(recommended)" : "(required)")), fileIn,
+        h("div", { class: "hint" }, (isAdmin
+          ? "At least one photo is expected — you'll be asked to confirm if you close without one. "
+          : "At least one photo. ") + "On a phone this opens the camera."), preview),
       err,
       h("div", { class: "btn-row" },
         h("button", { class: "btn sm primary", type: "button", onclick: submit }, "Mark completed"),
@@ -394,7 +396,10 @@ function pendingItem(p, opts) {
     return box;
     async function submit() {
       if (!comment.value.trim()) { err.textContent = "A completion comment is required."; return; }
-      if (!fileIn.files.length) { err.textContent = "At least one evidence photo is required."; return; }
+      if (!fileIn.files.length) {
+        if (!isAdmin) { err.textContent = "At least one evidence photo is required."; return; }
+        if (!confirm("Mark this pending completed with NO evidence photo?")) return;
+      }
       const fd = new FormData();
       fd.append("comment", comment.value.trim());
       [...fileIn.files].slice(0, 8).forEach(f => fd.append("photos", f));

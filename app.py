@@ -1605,7 +1605,8 @@ class Handler(BaseHTTPRequestHandler):
                          (user["id"], now(), parts[1]))
             return 200, {"ok": True, "photos": saved, "part": bool(pn)}
 
-        # technician (or admin) completes a Reviewed entry with mandatory evidence
+        # technician (or admin) completes a Reviewed entry with a comment + evidence photo.
+        # A technician must attach a photo; an admin may close without one.
         if len(parts) == 3 and parts[0] == "pendings" and parts[2] == "complete" and method == "POST":
             user = self._require(conn, ("ADMIN", "TECHNICIAN"))
             row = conn.execute("SELECT status FROM pending_entries WHERE id = ?", (parts[1],)).fetchone()
@@ -1619,7 +1620,7 @@ class Handler(BaseHTTPRequestHandler):
             comment = (fields.get("comment") or "").strip()
             if not comment:
                 raise ApiError(400, "A completion comment is required")
-            if not any(f["content"] for f in (files or [])):
+            if not any(f["content"] for f in (files or [])) and user["role"] != "ADMIN":
                 raise ApiError(400, "At least one evidence photo is required")
             self._save_photos(conn, int(parts[1]), files, "evidence")
             conn.execute(

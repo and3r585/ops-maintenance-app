@@ -220,8 +220,9 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
     quantities, service order). While **Reviewed**, *either* an admin or a technician can
     **Add photo / part** — an optional photo plus an optional part number + quantity, each
     stamped with who added it and when; the entry records its last-changed-by/at. A
-    technician completes with a mandatory comment + evidence photo — which plays a short
-    completion chime. On **app entry** an admin gets a one-off pop-up if any entries are
+    a **technician** completes with a mandatory comment + evidence photo; an **admin** may
+    close without a photo after confirming a "no evidence photo?" warning. Completing plays
+    a short chime. On **app entry** an admin gets a one-off pop-up if any entries are
     still awaiting review, and an **orange dot** stays on the *Site Dashboard* nav item,
     the *Open pending entries* KPI and the *Submitted* filter chip until the queue is clear.
     The **#/pendings** list (from the dashboard) filters by status and its **Export (CSV)**
