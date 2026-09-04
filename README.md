@@ -215,14 +215,16 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
     the 96 turbines; site-wide rows (no turbine) are skipped. Filterable by work type.
   - *Pendings* — ~570 open SGRE/SAP notifications imported from `Pendings.csv` (priority and
     affected system; `CREA`→Submitted, `APR`→Reviewed). Flow is
-    **Submitted → Reviewed → Completed**: to move an entry to **Reviewed** an admin must
-    assign a **priority of 1–5** (1 highest); the admin may then reserve parts (part numbers,
-    quantities, service order). While **Reviewed**, *either* an admin or a technician can
-    **Add photo / part** — an optional photo plus an optional part number + quantity, each
-    stamped with who added it and when; the entry records its last-changed-by/at. A
-    a **technician** completes with a mandatory comment + evidence photo; an **admin** may
-    close without a photo after confirming a "no evidence photo?" warning. Completing plays
-    a short chime. On **app entry** an admin gets a one-off pop-up if any entries are
+    **Submitted → Reviewed → Completed**. Raising a new entry needs a **note + at least one
+    photo**. To move an entry to **Reviewed** an admin must assign a **priority of 1–5**
+    (1 highest); the admin may then reserve parts (part numbers, quantities, service order).
+    While **Reviewed**, *either* an admin or a technician can **Add photo / part** — an
+    optional photo plus an optional part number + quantity, each stamped with who added it
+    and when; the entry records its last-changed-by/at. A **technician** completes with a
+    mandatory comment + closure photo; an **admin** may close without a photo after
+    confirming a "close without a photo?" warning box. Completing plays a short chime.
+    Re-opening a completed entry (→ Reviewed / Submitted) clears its completion note and
+    evidence photos. On **app entry** an admin gets a one-off pop-up if any entries are
     still awaiting review, and an **orange dot** stays on the *Site Dashboard* nav item,
     the *Open pending entries* KPI and the *Submitted* filter chip until the queue is clear.
     The **#/pendings** list (from the dashboard) filters by status and its **Export (CSV)**

@@ -128,6 +128,26 @@ function approveChange(title, rows) {
   });
 }
 
+/* In-app confirm/warning box → Promise<bool>. */
+function confirmBox(title, message, opts) {
+  opts = opts || {};
+  return new Promise((resolve) => {
+    const backdrop = h("div", { class: "modal-backdrop" });
+    const onKey = (e) => { if (e.key === "Escape") finish(false); };
+    const finish = (ok) => { backdrop.remove(); document.removeEventListener("keydown", onKey); resolve(ok); };
+    backdrop.append(h("div", { class: "modal" },
+      h("h3", {}, title),
+      h("p", {}, message),
+      h("div", { class: "btn-row", style: "justify-content:flex-end;margin-top:1rem" },
+        h("button", { class: "btn ghost", onclick: () => finish(false) }, opts.cancelLabel || "Cancel"),
+        h("button", { class: "btn " + (opts.danger ? "primary" : "primary"), onclick: () => finish(true) },
+          opts.okLabel || "Confirm"))));
+    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) finish(false); });
+    document.addEventListener("keydown", onKey);
+    document.body.append(backdrop);
+  });
+}
+
 /* Editable completion-date control, shared by the asset tabs and the dashboard
    drill-down lists. Admin-only editing, behind the approval modal; a PATCH to
    /records/:id updates SQLite and everything that reads it. Everyone else sees
@@ -397,8 +417,11 @@ function pendingItem(p, opts) {
     async function submit() {
       if (!comment.value.trim()) { err.textContent = "A completion comment is required."; return; }
       if (!fileIn.files.length) {
-        if (!isAdmin) { err.textContent = "At least one evidence photo is required."; return; }
-        if (!confirm("Mark this pending completed with NO evidence photo?")) return;
+        if (!isAdmin) { err.textContent = "A closure photo is required to complete this entry."; return; }
+        const ok = await confirmBox("Close without a photo?",
+          "This pending will be marked completed with no evidence photo. Continue?",
+          { okLabel: "Complete with no photo" });
+        if (!ok) return;
       }
       const fd = new FormData();
       fd.append("comment", comment.value.trim());
@@ -1490,6 +1513,7 @@ async function viewAsset(id) {
     const form = h("form", { class: "card", onsubmit: async (e) => {
       e.preventDefault(); err.textContent = "";
       if (!note.value.trim()) { err.textContent = "A note is required."; return; }
+      if (!file.files.length) { err.textContent = "A photo is required to raise a new pending entry."; return; }
       btn.disabled = true; btn.textContent = "Submitting…";
       const fd = new FormData();
       fd.append("note", note.value.trim());
@@ -1508,8 +1532,8 @@ async function viewAsset(id) {
       h("p", { class: "hint", style: "margin:-.2rem 0 .7rem" },
         "New entries start as Submitted. An admin reviews them; a technician then completes with a photo and comment."),
       h("div", { class: "field" }, h("label", {}, "Note"), note),
-      h("div", { class: "field" }, h("label", {}, "Photos (optional)"), file,
-        h("div", { class: "hint" }, "Up to 8 images. On a phone this opens the camera."), preview),
+      h("div", { class: "field" }, h("label", {}, "Photo (required)"), file,
+        h("div", { class: "hint" }, "At least one, up to 8. On a phone this opens the camera."), preview),
       btn, err);
     return form;
   }

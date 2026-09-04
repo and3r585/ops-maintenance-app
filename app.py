@@ -1536,6 +1536,8 @@ class Handler(BaseHTTPRequestHandler):
             if status not in ("SUBMITTED", "REVIEWED"):
                 raise ApiError(400, "Admin can set Submitted or Reviewed. "
                                     "Completion is done by a technician with evidence.")
+            # neither Submitted nor Reviewed is "done" — clear any completion record
+            _CLR = "completed_note = NULL, completed_by = NULL, completed_at = NULL"
             if status == "REVIEWED":
                 # a priority of 1-5 must be set before an entry can be reviewed
                 pr = data.get("priority", row["priority"])
@@ -1545,13 +1547,16 @@ class Handler(BaseHTTPRequestHandler):
                     pr = None
                 if pr is None or not (1 <= pr <= 5):
                     raise ApiError(400, "Assign a priority of 1-5 before marking this entry Reviewed.")
-                conn.execute("UPDATE pending_entries SET status = ?, priority = ? WHERE id = ?",
+                conn.execute("UPDATE pending_entries SET status = ?, priority = ?, " + _CLR + " WHERE id = ?",
                              (status, pr, parts[1]))
             else:  # leaving Reviewed drops any parts reservation
-                conn.execute("UPDATE pending_entries SET status = ? WHERE id = ?", (status, parts[1]))
+                conn.execute("UPDATE pending_entries SET status = ?, " + _CLR + ", "
+                             "parts_service_order = NULL, parts_reserved_at = NULL WHERE id = ?",
+                             (status, parts[1]))
                 conn.execute("DELETE FROM pending_parts WHERE pending_entry_id = ?", (parts[1],))
-                conn.execute("UPDATE pending_entries SET parts_service_order = NULL, "
-                             "parts_reserved_at = NULL WHERE id = ?", (parts[1],))
+            if row["status"] == "COMPLETED":
+                conn.execute("DELETE FROM pending_photos WHERE pending_entry_id = ? AND kind = 'evidence'",
+                             (parts[1],))
             return 200, {"ok": True}
 
         # admin reserves parts while an entry is Reviewed
@@ -1855,6 +1860,8 @@ class Handler(BaseHTTPRequestHandler):
             note = (self._json_body().get("note") or "").strip()
         if not note:
             raise ApiError(400, "A note is required")
+        if not any(f["content"] for f in (files or [])):
+            raise ApiError(400, "A photo is required to raise a new pending entry")
         cur = conn.execute(
             "INSERT INTO pending_entries (asset_id,author_id,note,status,created_at) "
             "VALUES (?,?,?,'SUBMITTED',?)", (asset_id, user["id"], note, now()),
