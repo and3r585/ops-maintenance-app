@@ -173,6 +173,15 @@ appear in **Notification Request** — in their own box between *Available techn
   turbine `<tag> Kilgallioch` or blank for the six exceptions, six technician columns) —
   files every turbine request into that turbine's **History** tab (tagged *Notification
   request*), and clears the whole board (incomplete drafts included) for the next set.
+  Submit also queues every request in the **outbox** (`notif_outbox`) for delivery straight
+  into the shared company workbook — decoupled from submit itself, so a slow or unreachable
+  workbook never blocks or fails a submission. A **Recent submissions** panel below the board
+  shows each submission's delivery status (pending / delivered / failed, per request), lets
+  an admin **download** that submission's `.xlsx`, **retry** a failed delivery, or **mark it
+  done by hand** once it's been pasted in manually. Delivery itself is a background worker
+  that POSTs queued rows as JSON to `$NOTIF_OUTBOX_WEBHOOK` (e.g. a Power Automate flow doing
+  *Add a row into a table*), with `$NOTIF_OUTBOX_API_KEY` sent as `X-Api-Key`; unset, rows
+  just queue for manual review — no code change needed to turn delivery on later.
 - **Asset detail** — tabs for **Details**, **Service dates**, **HV history**, **Stat history**,
   **Retrofits**, **Blades**, **Components**, **History** and **Pendings**, with **‹ ›**
   previous/next-turbine buttons in the header that step through the register alphabetically

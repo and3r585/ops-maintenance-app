@@ -485,6 +485,36 @@ textarea { resize: vertical; min-height: 90px; }
 .notif-bar .spacer { flex: 1; }
 @media (max-width: 620px) { .notif-fields { grid-template-columns: 1fr; } }
 
+/* ---- Notification Request: outbox / delivery status ---- */
+.outbox-panel { margin-top: 1.4rem; }
+.outbox-sub {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: .6rem .9rem; margin-bottom: .6rem;
+}
+.outbox-sub summary {
+  cursor: pointer; display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  font-size: .85rem; color: var(--text-soft); list-style: none;
+}
+.outbox-sub summary::-webkit-details-marker { display: none; }
+.outbox-sub summary::before { content: "▸"; color: var(--text-faint); }
+.outbox-sub[open] summary::before { content: "▾"; }
+.outbox-rows { display: flex; flex-direction: column; gap: .3rem; margin: .7rem 0 .5rem; }
+.outbox-row {
+  display: grid; grid-template-columns: 4.5rem 1fr 1fr auto auto; gap: .5rem; align-items: center;
+  font-size: .82rem; padding: .3rem .1rem; border-top: 1px solid var(--border);
+}
+.outbox-row:first-child { border-top: none; }
+.outbox-err { color: var(--danger); font-size: .78rem; cursor: help; }
+.outbox-badge {
+  font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+  border-radius: 999px; padding: .15rem .55rem; white-space: nowrap; justify-self: start;
+}
+.outbox-badge.ok    { color: var(--ok);     background: rgba(107,142,107,.15); }
+.outbox-badge.warn  { color: var(--warn);   background: rgba(200,155,60,.14); }
+.outbox-badge.err   { color: var(--danger); background: rgba(191,91,91,.12); }
+.outbox-badge.skip  { color: var(--text-soft); background: var(--surface-2); }
+.outbox-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+
 /* ---- Technician Roster ---- */
 .cal-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: 1rem; }
 .cal-nav {

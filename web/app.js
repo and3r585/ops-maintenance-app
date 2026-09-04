@@ -1588,6 +1588,14 @@ async function viewPlanning() {   /* Notification Request */
   }
   try { await load(); } catch (e) { return renderError(e); }
 
+  // ---- outbox: delivery of submitted requests to the shared company workbook ----
+  let outbox = null;
+  async function loadOutbox() {
+    try { outbox = await api("/notif/outbox"); } catch (e) { outbox = null; }
+  }
+  await loadOutbox();
+  const outboxBox = h("div", { class: "outbox-panel" });
+
   const dateInput = h("input", { type: "date", value: planDate, style: "width:auto" });
   dateInput.addEventListener("change", async () => {
     planDate = dateInput.value || planDate;
@@ -1743,6 +1751,7 @@ async function viewPlanning() {   /* Notification Request */
       plan = await api("/notif", { method: "POST", body: { date: planDate, op: "submit" } });
       toast(plan.filed ? "Submitted — " + plan.filed + " filed to asset history, board cleared"
                        : "Submitted — exported, board cleared");
+      await loadOutbox();
       draw();
     } catch (e) { toast(e.message, true); }
     finally { btn.disabled = false; }
@@ -1811,13 +1820,91 @@ async function viewPlanning() {   /* Notification Request */
     if (existing) existing.replaceWith(bar); else board.append(bar);
   }
 
+  /* ---- outbox: delivery status of past submissions ---- */
+  async function outboxOp(op, ids) {
+    try {
+      await api("/notif/outbox", { method: "POST", body: { op, ids } });
+      await loadOutbox();
+      renderOutbox();
+      toast(op === "retry" ? "Retrying…" : "Marked as done");
+    } catch (e) { toast(e.message, true); }
+  }
+
+  function outboxBadge(status, attempts) {
+    const cls = status === "SENT" ? "ok" : status === "FAILED" ? "err"
+      : status === "SKIPPED" ? "skip" : "warn";
+    const label = status.charAt(0) + status.slice(1).toLowerCase()
+      + (status === "FAILED" && attempts ? " (" + attempts + ")" : "");
+    return h("span", { class: "outbox-badge " + cls }, label);
+  }
+
+  function renderOutbox() {
+    clear(outboxBox);
+    outboxBox.append(h("h3", { class: "rail-head" }, "Recent submissions"));
+    if (!outbox) {
+      outboxBox.append(h("p", { class: "sub" }, "Couldn't load submission history."));
+      return;
+    }
+    outboxBox.append(h("p", { class: "sub" }, outbox.webhook_configured
+      ? "Delivering automatically to the shared workbook."
+      : "No delivery webhook is configured yet — download each submission and paste it in, "
+        + "then mark it as done, or wait for automatic delivery to be switched on."));
+    if (!outbox.submissions.length) {
+      outboxBox.append(h("p", { class: "sub" }, "Nothing submitted yet."));
+      return;
+    }
+    for (const s of outbox.submissions) {
+      const c = s.counts;
+      const overall = c.FAILED ? { cls: "err", label: c.FAILED + " failed" }
+        : c.PENDING ? { cls: "warn", label: c.PENDING + " pending" }
+        : { cls: "ok", label: "delivered" };
+      const outstanding = s.rows.filter(r => r.status === "PENDING" || r.status === "FAILED")
+        .map(r => r.id);
+      const when = s.created_at ? new Date(s.created_at).toLocaleString(undefined,
+        { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+      const details = h("details", { class: "outbox-sub" },
+        h("summary", {},
+          h("span", { class: "outbox-badge " + overall.cls }, overall.label),
+          h("span", {}, s.plan_date + " · " + s.rows.length + " request"
+            + (s.rows.length === 1 ? "" : "s") + " · " + when
+            + (s.created_by_name ? " · " + s.created_by_name : ""))),
+        h("div", { class: "outbox-rows" },
+          ...s.rows.map(r => h("div", { class: "outbox-row" },
+            h("span", {}, "Team " + r.team_no),
+            h("span", {}, r.contract_type || ""),
+            h("span", {}, r.turbine || ""),
+            outboxBadge(r.status, r.attempts),
+            r.last_error ? h("span", { class: "outbox-err", title: r.last_error }, "⚠ " + r.last_error) : null))));
+      const actions = h("div", { class: "outbox-actions" });
+      const dlBtn = h("button", { class: "btn sm ghost" }, "⭳ Download .xlsx");
+      dlBtn.onclick = () => downloadFile("/notif/outbox/export?submission_id=" + s.submission_id,
+        dlBtn, null, "notification-requests-" + s.plan_date + ".xlsx");
+      actions.append(dlBtn);
+      if (!readOnly && outstanding.length) {
+        if (c.FAILED) actions.append(h("button", { class: "btn sm ghost",
+          onclick: () => outboxOp("retry", outstanding) }, "Retry"));
+        actions.append(h("button", { class: "btn sm ghost", onclick: async () => {
+          const ok = await confirmBox("Mark as done?",
+            "Marks " + outstanding.length + " request(s) on this submission as delivered. "
+            + "Use this once you've put them into the workbook yourself.",
+            { okLabel: "Mark as done" });
+          if (ok) outboxOp("mark_sent", outstanding);
+        } }, "Mark as done"));
+      }
+      details.append(actions);
+      outboxBox.append(details);
+    }
+  }
+  renderOutbox();
+
   root.replaceChildren(shell("planning",
     h("div", { class: "page-head" }, h("h1", {}, "Notification Request"),
       h("p", { class: "sub" }, readOnly
         ? "Read-only view. Pick a roster date to see that day's notification-request teams."
         : "Pick the roster date, drag technicians into teams of up to " + (plan.team_size || 4)
           + ", add a contract type, turbine and description, then Submit Request to export and file to asset history.")),
-    h("div", { class: "plan-layout" }, rail, h("div", { class: "notif-wrap" }, board))));
+    h("div", { class: "plan-layout" }, rail, h("div", { class: "notif-wrap" }, board)),
+    outboxBox));
   draw();
 }
 

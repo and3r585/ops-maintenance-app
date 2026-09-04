@@ -27,7 +27,10 @@ import re
 import secrets
 import sqlite3
 import sys
+import threading
 import time
+import urllib.error
+import urllib.request
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -284,6 +287,32 @@ CREATE TABLE IF NOT EXISTS notif_member (
     slot      INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (plan_date, team_no, tech_id)
 );
+
+-- Notification Request outbox: on submit, one row per complete request is queued
+-- here so it can be delivered to the shared company workbook independently of the
+-- submit itself (decoupled — submit never blocks on the external system). A
+-- background worker POSTs PENDING rows to $NOTIF_OUTBOX_WEBHOOK when configured;
+-- until then they simply wait and an admin can mark them done by hand.
+CREATE TABLE IF NOT EXISTS notif_outbox (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    submission_id TEXT NOT NULL,          -- one per Submit action (idempotency key)
+    plan_date     TEXT NOT NULL,
+    team_no       INTEGER NOT NULL,
+    contract_type TEXT,
+    turbine       TEXT,                   -- "B18 Kilgallioch" or "" (non-turbine)
+    payload       TEXT NOT NULL,          -- JSON: named fields for a row-append action
+    cells         TEXT NOT NULL,          -- JSON: the 18 sheet cells, column order
+    status        TEXT NOT NULL DEFAULT 'PENDING'
+                    CHECK (status IN ('PENDING','SENT','FAILED','SKIPPED')),
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    last_error    TEXT,
+    created_at    TEXT NOT NULL,
+    created_by    INTEGER REFERENCES users(id),
+    sent_at       TEXT,
+    sent_via      TEXT,                   -- 'webhook' | 'manual'
+    UNIQUE (submission_id, team_no)
+);
+CREATE INDEX IF NOT EXISTS ix_notif_outbox_status ON notif_outbox(status);
 
 -- status flows Submitted -> Reviewed -> Completed
 CREATE TABLE IF NOT EXISTS pending_entries (
@@ -1216,7 +1245,7 @@ class Handler(BaseHTTPRequestHandler):
             return 200, load_notif(conn, date)
 
         if parts == ["notif"] and method == "POST":
-            self._require(conn, "ADMIN")
+            user = self._require(conn, "ADMIN")
             data = self._json_body()
             date = (data.get("date") or today()).strip()
             if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
@@ -1224,10 +1253,14 @@ class Handler(BaseHTTPRequestHandler):
             op = data.get("op")
 
             if op == "submit":
-                filed, cleared = _notif_submit(conn, date)
+                filed, cleared, submission_id = _notif_submit(conn, date, user)
+                conn.commit()
+                if submission_id and NOTIF_OUTBOX_WEBHOOK:
+                    threading.Thread(target=deliver_outbox, daemon=True).start()
                 res = load_notif(conn, date)
                 res["filed"] = filed
                 res["cleared"] = cleared
+                res["submission_id"] = submission_id
                 return 200, res
 
             team_no = int(data.get("team_no") or 0)
@@ -1300,6 +1333,80 @@ class Handler(BaseHTTPRequestHandler):
                 build_xlsx([("Notification Requests", rows)]),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "notification-requests-%s.xlsx" % date)
+
+        # --- Notification Request outbox (delivery to the shared company workbook) ---
+        if parts == ["notif", "outbox"] and method == "GET":
+            self._require(conn, ("ADMIN", "VIEW"))
+            limit = min(int((query.get("limit", ["300"])[0] or "300")), 1000)
+            rows = conn.execute(
+                "SELECT o.*, u.display_name AS created_by_name FROM notif_outbox o "
+                "LEFT JOIN users u ON u.id = o.created_by "
+                "ORDER BY o.id DESC LIMIT ?", (limit,)).fetchall()
+            subs = {}
+            for r in rows:
+                s = subs.setdefault(r["submission_id"], {
+                    "submission_id": r["submission_id"], "plan_date": r["plan_date"],
+                    "created_at": r["created_at"], "created_by_name": r["created_by_name"],
+                    "counts": {"PENDING": 0, "SENT": 0, "FAILED": 0, "SKIPPED": 0},
+                    "rows": [],
+                })
+                s["counts"][r["status"]] = s["counts"].get(r["status"], 0) + 1
+                s["rows"].append({
+                    "id": r["id"], "team_no": r["team_no"], "contract_type": r["contract_type"],
+                    "turbine": r["turbine"], "status": r["status"], "attempts": r["attempts"],
+                    "last_error": r["last_error"], "sent_at": r["sent_at"], "sent_via": r["sent_via"],
+                })
+            submissions = sorted(subs.values(), key=lambda s: s["created_at"], reverse=True)
+            for s in submissions:
+                s["rows"].sort(key=lambda r: r["team_no"])
+            return 200, {"submissions": submissions, "webhook_configured": bool(NOTIF_OUTBOX_WEBHOOK)}
+
+        if parts == ["notif", "outbox"] and method == "POST":
+            self._require(conn, "ADMIN")
+            data = self._json_body()
+            op = data.get("op")
+            ids = [int(i) for i in (data.get("ids") or [])]
+            if not ids:
+                raise ApiError(400, "ids is required")
+            qmarks = ",".join("?" * len(ids))
+            if op == "retry":
+                conn.execute(
+                    "UPDATE notif_outbox SET status='PENDING' "
+                    "WHERE id IN (%s) AND status IN ('FAILED','SKIPPED')" % qmarks, ids)
+                conn.commit()
+                if NOTIF_OUTBOX_WEBHOOK:
+                    threading.Thread(target=deliver_outbox, daemon=True).start()
+            elif op == "mark_sent":
+                conn.execute(
+                    "UPDATE notif_outbox SET status='SENT', sent_at=?, sent_via='manual', last_error=NULL "
+                    "WHERE id IN (%s)" % qmarks, (now(), *ids))
+            elif op == "discard":
+                conn.execute(
+                    "UPDATE notif_outbox SET status='SKIPPED' WHERE id IN (%s)" % qmarks, ids)
+            else:
+                raise ApiError(400, "Unknown op")
+            row = conn.execute("SELECT submission_id FROM notif_outbox WHERE id = ?",
+                               (ids[0],)).fetchone()
+            counts = {r["status"]: r["c"] for r in conn.execute(
+                "SELECT status, COUNT(*) c FROM notif_outbox WHERE submission_id = ? GROUP BY status",
+                (row["submission_id"],))} if row else {}
+            return 200, {"ok": True, "counts": counts}
+
+        if parts == ["notif", "outbox", "export"] and method == "GET":
+            self._require(conn, ("ADMIN", "VIEW"))
+            sub = (query.get("submission_id", [""])[0] or "").strip()
+            if not sub:
+                raise ApiError(400, "submission_id is required")
+            rows = conn.execute(
+                "SELECT * FROM notif_outbox WHERE submission_id = ? ORDER BY team_no", (sub,)
+            ).fetchall()
+            if not rows:
+                raise ApiError(404, "No such submission")
+            out = [NOTIF_XLSX_HEADER] + [json.loads(r["cells"]) for r in rows]
+            return 200, RawResponse(
+                build_xlsx([("Notification Requests", out)]),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "notification-requests-%s-%s.xlsx" % (rows[0]["plan_date"], sub))
 
         # --- Technician Roster ---
         if parts == ["roster"] and method == "GET":
@@ -2130,6 +2237,15 @@ NOTIF_MAX_TEAMS = 30
 NOTIF_HUB = "SO5"           # matches the "Scott & Stuart" export ("SO5", letter O)
 NOTIF_SITE = "Kilgallioch"
 
+# Outbox delivery. Set NOTIF_OUTBOX_WEBHOOK to a URL (e.g. a Power Automate
+# "When an HTTP request is received" trigger that does "Add a row into a table")
+# and every submitted request is POSTed there as JSON; leave it unset and rows
+# just queue until an admin marks them done. NOTIF_OUTBOX_API_KEY, if set, is
+# sent as the X-Api-Key header so the receiver can reject anything else.
+NOTIF_OUTBOX_WEBHOOK = os.environ.get("NOTIF_OUTBOX_WEBHOOK", "").strip()
+NOTIF_OUTBOX_API_KEY = os.environ.get("NOTIF_OUTBOX_API_KEY", "").strip()
+NOTIF_OUTBOX_MAX_ATTEMPTS = 8
+
 # Contract-type dropdown — mirrored from the "Lookups" sheet of the notification
 # request workbook (column "Contract Type").
 CONTRACT_TYPES = [
@@ -2255,39 +2371,91 @@ def load_notif(conn, date):
     }
 
 
+def _notif_ddmmyyyy(date):
+    try:
+        return "%s/%s/%s" % (date[8:10], date[5:7], date[0:4])   # DD/MM/YYYY
+    except Exception:
+        return date
+
+
+def _notif_turbine_label(t):
+    if t["contract_type"] in NO_TURBINE_CONTRACTS or not t["asset_tag"]:
+        return ""
+    return "%s %s" % (t["asset_tag"], NOTIF_SITE)                 # e.g. "B18 Kilgallioch"
+
+
+def _notif_row_cells(t, date):
+    """The 18 sheet cells for one complete team, in NOTIF_XLSX_HEADER column order."""
+    names = [m["display_name"] for m in t["members"]][:NOTIF_TEAM_SIZE]
+    names += [""] * (6 - len(names))
+    return [
+        _notif_ddmmyyyy(date), NOTIF_HUB, NOTIF_SITE, _notif_turbine_label(t),
+        "", "", t["contract_type"], "",
+        (t["description"] or "").strip(), (t["ats_case"] or "").strip(),
+        "", (t["son"] or "").strip(), *names,      # SON -> SGRE SERVICE ORDER NUMBER
+    ]
+
+
+def _notif_row_payload(t, date):
+    """Named-field view of one team's row — friendlier for a row-append action
+    (Power Automate / Graph) than positional cells."""
+    return {
+        "date": _notif_ddmmyyyy(date),
+        "iso_date": date,
+        "hub": NOTIF_HUB,
+        "site": NOTIF_SITE,
+        "turbine_no": _notif_turbine_label(t),
+        "functional_location": "",
+        "floc_and_equipment": "",
+        "contract_type": t["contract_type"] or "",
+        "wbs_element": "",
+        "notification_description": (t["description"] or "").strip(),
+        "ats_case": (t["ats_case"] or "").strip(),
+        "sgre_notification_number": "",
+        "sgre_service_order_number": (t["son"] or "").strip(),
+        "technicians": [m["display_name"] for m in t["members"]][:NOTIF_TEAM_SIZE],
+    }
+
+
 def _notif_export_rows(conn, date):
     """Header + one row per complete team, laid out like the target sheet."""
     rows = [NOTIF_XLSX_HEADER]
-    d = date
-    try:
-        d = "%s/%s/%s" % (date[8:10], date[5:7], date[0:4])   # DD/MM/YYYY
-    except Exception:
-        pass
     for t in _notif_teams(conn, date):
-        if not _team_complete(t):
-            continue
-        names = [m["display_name"] for m in t["members"]][:NOTIF_TEAM_SIZE]
-        names += [""] * (6 - len(names))
-        turbine = "" if (t["contract_type"] in NO_TURBINE_CONTRACTS or not t["asset_tag"]) \
-            else "%s %s" % (t["asset_tag"], NOTIF_SITE)      # e.g. "B18 Kilgallioch"
-        rows.append([
-            d, NOTIF_HUB, NOTIF_SITE, turbine,
-            "", "", t["contract_type"], "",
-            (t["description"] or "").strip(), (t["ats_case"] or "").strip(),
-            "", (t["son"] or "").strip(), *names,      # SON -> SGRE SERVICE ORDER NUMBER
-        ])
+        if _team_complete(t):
+            rows.append(_notif_row_cells(t, date))
     return rows
 
 
-def _notif_submit(conn, date):
-    """File every complete request that has a turbine into that turbine's history,
-    then clear the whole board for the date so it's ready for the next set.
-    Incomplete draft teams are discarded. Returns (filed_to_history, requests)."""
+def _outbox_enqueue(conn, date, user):
+    """Queue every complete request for the date for delivery to the shared
+    workbook. Returns (submission_id, n_rows). Called from _notif_submit before
+    the board is cleared."""
+    ready = [t for t in _notif_teams(conn, date) if _team_complete(t)]
+    if not ready:
+        return None, 0
+    sub = secrets.token_hex(8)
+    for t in ready:
+        conn.execute(
+            "INSERT INTO notif_outbox (submission_id, plan_date, team_no, contract_type, "
+            "turbine, payload, cells, created_at, created_by) VALUES (?,?,?,?,?,?,?,?,?)",
+            (sub, date, t["team_no"], t["contract_type"], _notif_turbine_label(t),
+             json.dumps(_notif_row_payload(t, date)),
+             json.dumps(_notif_row_cells(t, date)), now(),
+             user["id"] if user else None))
+    return sub, len(ready)
+
+
+def _notif_submit(conn, date, user=None):
+    """Queue every complete request for delivery to the shared workbook, file the
+    ones with a turbine into that turbine's history, then clear the whole board
+    for the date. Incomplete draft teams are discarded.
+    Returns (filed_to_history, requests, submission_id)."""
     teams = _notif_teams(conn, date)
     ready = [t for t in teams if _team_complete(t)]
     if not ready:
         raise ApiError(400, "Add at least one request — a contract type, a description "
                        "and at least one technician — before submitting.")
+    sub, _ = _outbox_enqueue(conn, date, user)
     filed = 0
     for t in ready:
         if t["asset_id"] and t["contract_type"] not in NO_TURBINE_CONTRACTS:
@@ -2303,7 +2471,80 @@ def _notif_submit(conn, date):
             filed += 1
     conn.execute("DELETE FROM notif_member WHERE plan_date=?", (date,))
     conn.execute("DELETE FROM notif_request WHERE plan_date=?", (date,))
-    return filed, len(ready)
+    return filed, len(ready), sub
+
+
+# --- outbox delivery -------------------------------------------------------
+#
+# Decoupled from submit: a submit only writes PENDING rows. Delivery to the
+# shared workbook happens here, best-effort, and retries on its own schedule so
+# the external system being slow or down never blocks or fails a submit.
+
+def _outbox_deliver_row(row):
+    """POST one queued row to the configured webhook. Returns (ok, detail)."""
+    if not NOTIF_OUTBOX_WEBHOOK:
+        return False, "no NOTIF_OUTBOX_WEBHOOK configured"
+    body = json.dumps({
+        "submission_id": row["submission_id"],
+        "plan_date": row["plan_date"],
+        "team_no": row["team_no"],
+        "row": json.loads(row["payload"]),
+        "cells": json.loads(row["cells"]),
+        "columns": NOTIF_XLSX_HEADER,
+    }).encode("utf-8")
+    req = urllib.request.Request(NOTIF_OUTBOX_WEBHOOK, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    if NOTIF_OUTBOX_API_KEY:
+        req.add_header("X-Api-Key", NOTIF_OUTBOX_API_KEY)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if 200 <= resp.status < 300:
+                return True, "HTTP %d" % resp.status
+            return False, "HTTP %d" % resp.status
+    except urllib.error.HTTPError as e:
+        return False, "HTTP %d %s" % (e.code, (e.reason or ""))
+    except Exception as e:                                    # timeout, DNS, refused…
+        return False, str(e) or e.__class__.__name__
+
+
+def deliver_outbox(limit=50):
+    """Attempt delivery of PENDING / retryable FAILED rows. Safe to call from a
+    worker thread or right after a submit. No-op when no webhook is set."""
+    if not NOTIF_OUTBOX_WEBHOOK:
+        return 0, 0
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM notif_outbox WHERE status IN ('PENDING','FAILED') "
+            "AND attempts < ? ORDER BY id LIMIT ?",
+            (NOTIF_OUTBOX_MAX_ATTEMPTS, limit)).fetchall()
+        sent = failed = 0
+        for row in rows:
+            ok, detail = _outbox_deliver_row(row)
+            if ok:
+                conn.execute(
+                    "UPDATE notif_outbox SET status='SENT', sent_at=?, sent_via='webhook', "
+                    "attempts=attempts+1, last_error=NULL WHERE id=?", (now(), row["id"]))
+                sent += 1
+            else:
+                conn.execute(
+                    "UPDATE notif_outbox SET status='FAILED', attempts=attempts+1, "
+                    "last_error=? WHERE id=?", (detail[:500], row["id"]))
+                failed += 1
+        conn.commit()
+        return sent, failed
+    finally:
+        conn.close()
+
+
+def _outbox_worker():
+    """Background retry loop. Started once from main() when a webhook is set."""
+    while True:
+        time.sleep(120)
+        try:
+            deliver_outbox()
+        except Exception as e:
+            print("  outbox worker error: %s" % e)
 
 
 def _service_month(name):
@@ -2406,7 +2647,7 @@ def _guard_reset(force):
     try:
         c = get_db()
         n = sum(c.execute("SELECT COUNT(*) c FROM " + t).fetchone()["c"]
-                for t in ("pending_photos", "record_changes", "notif_request"))
+                for t in ("pending_photos", "record_changes", "notif_request", "notif_outbox"))
         n += c.execute("SELECT COUNT(*) c FROM pending_entries WHERE wo_code IS NULL").fetchone()["c"]
         c.close()
     except sqlite3.Error:
@@ -2454,7 +2695,13 @@ def main():
     n_app = conn.execute("SELECT COUNT(*) c FROM pending_entries WHERE wo_code IS NULL").fetchone()["c"]
     n_edits = conn.execute("SELECT COUNT(*) c FROM record_changes").fetchone()["c"]
     n_smp = conn.execute("SELECT COUNT(*) c FROM assets WHERE smp_gearbox IS NOT NULL").fetchone()["c"]
+    n_outbox_pending = conn.execute(
+        "SELECT COUNT(*) c FROM notif_outbox WHERE status IN ('PENDING','FAILED')").fetchone()["c"]
     conn.close()
+
+    if NOTIF_OUTBOX_WEBHOOK:
+        threading.Thread(target=_outbox_worker, daemon=True).start()
+        deliver_outbox()          # drain anything queued while the server was down
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     url = "http://%s:%d" % ("localhost" if args.host in ("127.0.0.1", "0.0.0.0") else args.host, args.port)
@@ -2472,6 +2719,10 @@ def main():
                                  else "Pillow NOT installed — photos stored as-is (pip install pillow)"))
     print("  note         app-entered data lives in data/ — plain `python3 app.py` keeps it;")
     print("               `--reset` deletes it. Nothing else wipes the DB.")
+    print("  notif outbox %s%s" % (
+        ("delivering to " + NOTIF_OUTBOX_WEBHOOK) if NOTIF_OUTBOX_WEBHOOK
+        else "no NOTIF_OUTBOX_WEBHOOK set — rows queue for manual review",
+        (", %d queued" % n_outbox_pending) if n_outbox_pending else ""))
     print("  stop         Ctrl-C\n")
     try:
         httpd.serve_forever()
