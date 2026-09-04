@@ -547,7 +547,7 @@ async function viewDashboard() {
   const next0 = (d.next_services || [])[0];
   const svcCard = kpi(d.service_count, "Turbines with a service outstanding",
     next0 ? "Soonest: " + next0.tag + " " + next0.name
-      + (next0.planned ? " · " + (next0.starts_on ? "Started · " : "") + fmtDate(next0.planned) : "") : "—",
+      + (next0.planned ? " · " + (next0.starts_on ? "Started - Due " : "") + fmtDate(next0.planned) : "") : "—",
     "#/services");
   const retroCard = kpi(d.incomplete_retrofit_count, "Retrofit items not completed",
     `${(d.incomplete_retrofits || []).length} campaigns affected`, "#/retrofits");
@@ -594,7 +594,7 @@ function serviceRows(list) {
       h("div", { class: "rec-name" }, s.tag,
         h("span", { class: "hint", style: "margin-left:.5rem;font-weight:400" }, s.name)),
       h("span", { class: "rec-date " + (s.starts_on ? "wip" : dd == null ? "muted" : dd < 0 ? "out" : dd <= 30 ? "wip" : "") },
-        (s.starts_on ? "Started · " : "") + (s.planned ? fmtDate(s.planned) : "—"))));
+        (s.starts_on ? "Started - Due " : "") + (s.planned ? fmtDate(s.planned) : "—"))));
   }
   return wrap;
 }
@@ -667,7 +667,7 @@ async function viewServicesList() {
         h("td", {}, s.name),
         h("td", { class: "svc-planned" }, s.planned
           ? h("span", dd < 0 ? { style: "color:var(--danger)" } : {},
-              (s.starts_on ? "Started · " : "") + fmtDate(s.planned)
+              (s.starts_on ? "Started - Due " : "") + fmtDate(s.planned)
               + (dd < 0 ? ` · ${-dd}d overdue` : dd <= 30 ? ` · in ${dd}d` : ""))
           : (s.starts_on ? "Started" : "—")),
       ];
@@ -1125,9 +1125,9 @@ async function viewAsset(id) {
     let dueClass = "muted";
     if (ns && ns.planned) {
       const days = Math.round((new Date(ns.planned) - new Date()) / 86400000);
-      dueNote = (ns.starts_on ? "Started · " : "") + (days < 0 ? `Overdue by ${-days} days`
+      dueNote = days < 0 ? `Overdue by ${-days} days`
         : days === 0 ? "Due today"
-        : `In ${days} day${days === 1 ? "" : "s"}`);
+        : `In ${days} day${days === 1 ? "" : "s"}`;
       dueClass = ns.starts_on ? "soon" : days < 0 ? "overdue" : days <= 30 ? "soon" : "ok";
     }
     return h("div", { class: "grid cols-2" },
@@ -1143,7 +1143,7 @@ async function viewAsset(id) {
         h("h3", {}, "Next service due"),
         h("div", { class: "next-svc-body" },
           h("div", { class: "next-svc-date" },
-            (ns && ns.starts_on ? "Started · " : "") + (ns && ns.planned ? fmtDate(ns.planned) : "—")),
+            (ns && ns.starts_on ? "Started - Due " : "") + (ns && ns.planned ? fmtDate(ns.planned) : "—")),
           h("div", { class: "next-svc-note" }, dueNote)),
         h("p", { class: "hint", style: "margin:.6rem 0 0" },
           ns ? ns.name + " — planned from the previous completion + interval"
