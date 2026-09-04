@@ -7,7 +7,16 @@ const State = {
   token: localStorage.getItem("ops_token") || null,
   user: null,
   modules: [],
+  submittedCount: 0,        // pendings awaiting review — drives the alert dots (admin)
 };
+
+function setSubmittedCount(n) {
+  n = Number(n) || 0;
+  if (n === State.submittedCount) return;
+  State.submittedCount = n;
+  document.querySelectorAll("[data-nav='dashboard']").forEach(a =>
+    a.classList.toggle("has-alert", n > 0 && State.user && State.user.role === "ADMIN"));
+}
 
 const root = document.getElementById("root");
 
@@ -391,10 +400,47 @@ function pendingItem(p, opts) {
       [...fileIn.files].slice(0, 8).forEach(f => fd.append("photos", f));
       try {
         await api("/pendings/" + p.id + "/complete", { method: "POST", form: fd });
+        playDoneChime();
         toast("Pending completed"); reload();
       } catch (e) { err.textContent = e.message; }
     }
   }
+}
+
+/* Short "task done" chime (Web Audio — no asset). Two soft rising bell notes,
+   in the spirit of Microsoft To Do's completion sound. A single context is kept
+   and unlocked on the first user gesture so it plays reliably on Safari too. */
+let _audioCtx = null;
+function _audio() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  if (!_audioCtx) _audioCtx = new AC();
+  if (_audioCtx.state === "suspended") _audioCtx.resume().catch(() => {});
+  return _audioCtx;
+}
+window.addEventListener("pointerdown", () => _audio(), { once: true });
+
+function playDoneChime() {
+  try {
+    const ctx = _audio();
+    if (!ctx) return;
+    const t0 = ctx.currentTime + 0.02;
+    const master = ctx.createGain();
+    master.gain.value = 0.9;
+    master.connect(ctx.destination);
+    [[784.0, 0], [1174.7, 0.11]].forEach(([freq, at]) => {   // G5 → D6
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t0 + at);
+      g.gain.exponentialRampToValueAtTime(0.22, t0 + at + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.42);
+      osc.connect(g).connect(master);
+      osc.start(t0 + at);
+      osc.stop(t0 + at + 0.45);
+    });
+  } catch (_) {}
 }
 
 /* ---------- auth ---------- */
@@ -417,10 +463,12 @@ async function logout(silent) {
    ================================================================ */
 const MODULE_ROUTE = { assets: "#/assets", roster: "#/roster", planning: "#/planning", dashboard: "#/dashboard", explorer: "#/explorer" };
 function topbar(active) {
+  const alert = State.user && State.user.role === "ADMIN" && State.submittedCount > 0;
   const navItems = State.modules.map((m) =>
     h("a", {
       href: MODULE_ROUTE[m.key] || "#/home",
-      class: active === m.key ? "active" : "",
+      "data-nav": m.key,
+      class: (active === m.key ? "active" : "") + (m.key === "dashboard" && alert ? " has-alert" : ""),
     }, m.name));
   return h("header", { class: "topbar" },
     h("div", { class: "brand", onclick: () => navigate("#/home"), style: "cursor:pointer" },
@@ -533,17 +581,22 @@ async function viewDashboard() {
 
   const daysAway = (iso) => Math.round((new Date(iso) - new Date()) / 86400000);
 
-  const kpi = (num, label, sub, route) => h("div", {
-    class: "card kpi clickable", onclick: () => navigate(route),
+  const submitted = (d.pendings_by_status || {}).SUBMITTED || 0;
+  setSubmittedCount(submitted);
+
+  const kpi = (num, label, sub, route, alert) => h("div", {
+    class: "card kpi clickable" + (alert ? " has-alert" : ""), onclick: () => navigate(route),
     title: "Open full list",
   }, h("div", { class: "kpi-num" }, num),
      h("div", { class: "kpi-label" }, label),
      h("div", { class: "kpi-sub" }, sub),
      h("div", { class: "kpi-more" }, "View list →"));
 
+  const isAdmin = State.user.role === "ADMIN";
   const pendCard = kpi(d.open_pendings, "Open pending entries",
     Object.entries(d.pendings_by_status || {})
-      .map(([s, c]) => `${c} ${s.toLowerCase()}`).join(" · ") || "None", "#/pendings");
+      .map(([s, c]) => `${c} ${s.toLowerCase()}`).join(" · ") || "None", "#/pendings",
+    isAdmin && submitted > 0);
   const next0 = (d.next_services || [])[0];
   const svcCard = kpi(d.service_count, "Turbines with a service outstanding",
     next0 ? "Soonest: " + next0.tag + " " + next0.name
@@ -609,9 +662,12 @@ async function viewPendingsList() {
 
   const counts = data.counts || { SUBMITTED: 0, REVIEWED: 0, COMPLETED: 0 };
   const total = counts.SUBMITTED + counts.REVIEWED + counts.COMPLETED;
+  setSubmittedCount(counts.SUBMITTED);
+  const alertAdmin = State.user.role === "ADMIN" && counts.SUBMITTED > 0;
 
   const chip = (label, val) => h("button", {
-    class: "filter-chip" + ((want || "") === val ? " active" : ""),
+    class: "filter-chip" + ((want || "") === val ? " active" : "")
+      + (val === "SUBMITTED" && alertAdmin ? " has-alert" : ""),
     onclick: () => navigate("#/pendings" + (val ? "?status=" + val : "")),
   }, label);
 
@@ -1793,10 +1849,50 @@ async function viewRoster() {
   }
   const codeChip = (code) => h("span", { class: "rcode r-" + codeSlug(code), title: codeLabel(code) }, code);
 
+  const trainNote = (tid, iso) => ((data.train_notes || {})[String(tid)] || {})[iso];
+  async function trainNoteEditor(tid, iso, techName) {
+    const cur = trainNote(tid, iso);
+    const canEdit = !!data.can_note_train;
+    const ta = h("textarea", { rows: "4", placeholder: "What training, where, how long…" }, cur ? cur.note : "");
+    ta.disabled = !canEdit;
+    const backdrop = h("div", { class: "modal-backdrop" });
+    const close = () => backdrop.remove();
+    const save = async (text) => {
+      try {
+        await api("/roster/train-note", { method: "PATCH", body: { tech_id: tid, date: iso, note: text } });
+        close(); await load(); draw();
+        toast(text ? "Training note saved" : "Training note deleted");
+      } catch (e) { toast(e.message, true); }
+    };
+    const actions = [h("button", { class: "btn ghost", onclick: close }, canEdit ? "Cancel" : "Close")];
+    if (canEdit) {
+      if (cur) actions.push(h("button", { class: "btn ghost danger", onclick: () => save("") }, "Delete"));
+      actions.push(h("button", { class: "btn primary", onclick: () => save(ta.value.trim()) }, "Save"));
+    }
+    backdrop.append(h("div", { class: "modal" },
+      h("h3", {}, "Training note — " + (techName ? techName + " · " : "") + fmtDate(iso)),
+      cur ? h("p", { class: "hint" }, "By " + (cur.author || "?") + " · " + fmtDate((cur.updated_at || "").slice(0, 10))) : null,
+      ta, h("div", { class: "btn-row", style: "justify-content:flex-end;margin-top:1rem" }, ...actions)));
+    backdrop.addEventListener("click", e => { if (e.target === backdrop) close(); });
+    document.body.append(backdrop);
+    if (canEdit) ta.focus();
+  }
+  // code chip, but TRG becomes a button that opens the training note
+  function codeCell(tid, iso, code, techName) {
+    if (code !== "TRG") return codeChip(code);
+    const has = !!trainNote(tid, iso);
+    return h("button", {
+      class: "rcode r-trg trg-note" + (has ? " has" : ""),
+      title: has ? "Training note — " + trainNote(tid, iso).note : "Add a training note",
+      onclick: (e) => { e.stopPropagation(); trainNoteEditor(tid, iso, techName); },
+    }, "TRG");
+  }
+
   function techCalendar() {
     const tid = data.tech.id;
     const ent = data.entries[String(tid)] || {};
-    return h("div", { class: "card" }, h("h3", {}, isTech ? "My roster" : data.tech.name),
+    const nm = isTech ? "My roster" : data.tech.name;
+    return h("div", { class: "card" }, h("h3", {}, nm),
       calShell((cell, iso) => {
         const code = ent[iso] || "";
         if (data.can_edit) {
@@ -1805,8 +1901,19 @@ async function viewRoster() {
             ...data.key.map(([c]) => { const o = h("option", { value: c }, c); if (c === code) o.selected = true; return o; }));
           s.addEventListener("change", () => setDay(tid, iso, s.value));
           cell.append(s);
+          if (code === "TRG") cell.append(trgLink(tid, iso, data.tech.name));
+        } else if (code === "TRG") {
+          cell.append(codeCell(tid, iso, code, nm));
         } else if (code) cell.append(codeChip(code));
       }));
+  }
+  function trgLink(tid, iso, techName) {
+    const has = !!trainNote(tid, iso);
+    return h("button", {
+      class: "trg-note-link" + (has ? " has" : ""),
+      title: has ? trainNote(tid, iso).note : "Add a training note",
+      onclick: (e) => { e.stopPropagation(); trainNoteEditor(tid, iso, techName); },
+    }, has ? "✎ note" : "＋ note");
   }
   function noteMarker(iso) {
     const note = (data.notes || {})[iso];
@@ -1854,7 +1961,7 @@ async function viewRoster() {
         for (const t of data.techs) {
           const code = (data.entries[String(t.id)] || {})[iso];
           if (code) list.append(h("div", { class: "cal-team-row" },
-            h("span", { class: "ct-name" }, shortName(t.name)), codeChip(code)));
+            h("span", { class: "ct-name" }, shortName(t.name)), codeCell(t.id, iso, code, t.name)));
         }
         if (list.children.length) cell.append(list);
       }));
@@ -1875,7 +1982,16 @@ async function viewRoster() {
       cells.forEach(iso => {
         const code = ent[iso] || "";
         const hi = gridDay === iso && !ROSTER_FREE.has(code) ? " unavail" : "";
-        tr.append(h("td", { class: "r-" + codeSlug(code) + hi, title: code ? codeLabel(code) : "" }, code || ""));
+        if (code === "TRG") {
+          const has = !!trainNote(t.id, iso);
+          tr.append(h("td", {
+            class: "r-trg trg-cell" + hi + (has ? " has-note" : ""), style: "cursor:pointer",
+            title: has ? "Training note — " + trainNote(t.id, iso).note : "Add a training note",
+            onclick: () => trainNoteEditor(t.id, iso, t.name),
+          }, "TRG"));
+        } else {
+          tr.append(h("td", { class: "r-" + codeSlug(code) + hi, title: code ? codeLabel(code) : "" }, code || ""));
+        }
       });
       tb.append(tr);
     }
@@ -2011,11 +2127,15 @@ async function bootstrap() {
   }
 }
 
+async function refreshSubmittedCount() {
+  if (!State.user || State.user.role !== "ADMIN") return 0;
+  try { const n = (await api("/pendings/review-count")).submitted; setSubmittedCount(n); return n; }
+  catch (_) { return State.submittedCount; }
+}
+
 async function maybeReviewPrompt() {
-  if (!State.user || State.user.role !== "ADMIN") return;
-  let n = 0;
-  try { n = (await api("/pendings/review-count")).submitted; } catch (_) { return; }
-  if (!n) return;
+  const n = await refreshSubmittedCount();
+  if (!n || State.user.role !== "ADMIN") return;
   const backdrop = h("div", { class: "modal-backdrop" });
   const close = () => backdrop.remove();
   backdrop.append(h("div", { class: "modal" },

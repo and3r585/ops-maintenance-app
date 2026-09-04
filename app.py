@@ -208,6 +208,16 @@ CREATE TABLE IF NOT EXISTS roster_note (
     updated_at TEXT NOT NULL
 );
 
+-- Note against one technician's day (surfaced on TRG / training days).
+CREATE TABLE IF NOT EXISTS roster_train_note (
+    tech_id    INTEGER NOT NULL REFERENCES roster_tech(id),
+    on_date    TEXT NOT NULL,
+    note       TEXT NOT NULL,
+    author_id  INTEGER REFERENCES users(id),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (tech_id, on_date)
+);
+
 -- Work-order history per asset (from the Job Request "SCOTT & STUART 2026" tab).
 CREATE TABLE IF NOT EXISTS asset_history (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -769,7 +779,7 @@ EXPLORER_LABEL = {k: lbl for k, lbl, _ in EXPLORER_CATEGORIES}
 EXPLORER_VALUE_FIELD = {k: vf for k, _l, vf in EXPLORER_CATEGORIES}
 
 # read-only, non-turbine tables shown in the Data Explorer as a flat list
-EXPLORER_FLAT = {"roster_note": "Roster notes"}
+EXPLORER_FLAT = {"roster_note": "Roster notes", "service_start": "Service start dates"}
 
 
 def explorer_flat(conn, category):
@@ -781,6 +791,14 @@ def explorer_flat(conn, category):
             "ORDER BY n.on_date").fetchall()
         return (["Date", "Note", "Entered by"],
                 [[r["on_date"], r["note"], r["author"] or ""] for r in rows])
+    if category == "service_start":
+        rows = conn.execute(
+            "SELECT a.tag, r.name, r.starts_on, r.occurred_on FROM asset_records r "
+            "JOIN assets a ON a.id = r.asset_id "
+            "WHERE r.category = 'service' AND r.starts_on IS NOT NULL "
+            "ORDER BY a.tag, r.sort, r.name").fetchall()
+        return (["Turbine", "Service", "Start date", "Completed"],
+                [[r["tag"], r["name"], r["starts_on"], r["occurred_on"] or ""] for r in rows])
     raise ApiError(404, "Unknown table")
 
 
@@ -1254,6 +1272,30 @@ class Handler(BaseHTTPRequestHandler):
             return 200, {"ok": True, "date": d, "note": note,
                          "author": user["display_name"] if note else None}
 
+        if parts == ["roster", "train-note"] and method == "PATCH":
+            user = self._require(conn)
+            data = self._json_body()
+            tid = data.get("tech_id")
+            d = (data.get("date") or "").strip()
+            note = (data.get("note") or "").strip()
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", d):
+                raise ApiError(400, "A date is required (YYYY-MM-DD)")
+            tech = conn.execute("SELECT id, user_id FROM roster_tech WHERE id = ?", (tid,)).fetchone()
+            if not tech:
+                raise ApiError(404, "Technician not found")
+            if user["role"] not in ("ADMIN",) and tech["user_id"] != user["id"]:
+                raise ApiError(403, "You can only note your own training days")
+            if note:
+                conn.execute(
+                    "INSERT INTO roster_train_note (tech_id, on_date, note, author_id, updated_at) "
+                    "VALUES (?,?,?,?,?) ON CONFLICT(tech_id, on_date) DO UPDATE SET "
+                    "note = excluded.note, author_id = excluded.author_id, updated_at = excluded.updated_at",
+                    (tid, d, note, user["id"], now()))
+            else:
+                conn.execute("DELETE FROM roster_train_note WHERE tech_id = ? AND on_date = ?", (tid, d))
+            return 200, {"ok": True, "tech_id": tid, "date": d, "note": note,
+                         "author": user["display_name"] if note else None}
+
         if parts == ["roster", "techs"] and method == "GET":
             self._require(conn, ("ADMIN", "VIEW"))
             archived = query.get("archived", ["0"])[0] == "1"
@@ -1416,10 +1458,9 @@ class Handler(BaseHTTPRequestHandler):
                 if rec["status"] != new_status:
                     log_record_change(conn, rec, "status", rec["status"], new_status, user["id"])
                 return 200, {"ok": True, "occurred_on": iso, "status": new_status}
-            # a completed service has no planned start date any more
-            conn.execute("UPDATE asset_records SET occurred_on = ?, "
-                         "starts_on = CASE WHEN ? IS NOT NULL THEN NULL ELSE starts_on END WHERE id = ?",
-                         (iso, iso, parts[1]))
+            # the start date is kept on record (history / Data Explorer) even once
+            # the service is completed — the asset tab just stops showing it.
+            conn.execute("UPDATE asset_records SET occurred_on = ? WHERE id = ?", (iso, parts[1]))
             if (old or None) != (iso or None):
                 log_record_change(conn, rec, "occurred_on", old, iso, user["id"])
             return 200, {"ok": True, "occurred_on": iso}
@@ -1749,6 +1790,17 @@ class Handler(BaseHTTPRequestHandler):
             total += len(nrows)
             sheets.append(("Roster notes", ndata))
 
+            srows = conn.execute(
+                "SELECT a.tag, r.name, r.starts_on, r.occurred_on FROM asset_records r "
+                "JOIN assets a ON a.id = r.asset_id "
+                "WHERE r.category = 'service' AND r.starts_on BETWEEN ? AND ? "
+                "ORDER BY r.starts_on, a.tag", (frm, to)).fetchall()
+            sdata = [["Turbine", "Service", "Start date", "Completed"]]
+            for r in srows:
+                sdata.append([r["tag"], r["name"], r["starts_on"], (r["occurred_on"] or "")])
+            total += len(srows)
+            sheets.append(("Service start dates", sdata))
+
             if total == 0:
                 raise ApiError(404, "No completions recorded between %s and %s" % (frm, to))
             fname = "completions-%s_to_%s.xlsx" % (frm, to)
@@ -1885,6 +1937,22 @@ ROSTER_AVAILABLE = {"", "KILG"}
 ROSTER_HOLIDAY_CODES = ("HOL in WD", "HOL Apprvd")
 
 
+def _train_notes(conn, d0, d1, tech_id=None):
+    """{str(tech_id): {date: {note, author, updated_at}}} for training-day notes."""
+    q = ("SELECT n.tech_id, n.on_date, n.note, n.updated_at, u.display_name AS author "
+         "FROM roster_train_note n LEFT JOIN users u ON u.id = n.author_id "
+         "WHERE n.on_date BETWEEN ? AND ?")
+    args = [d0, d1]
+    if tech_id is not None:
+        q += " AND n.tech_id = ?"
+        args.append(tech_id)
+    out = {}
+    for r in conn.execute(q, args):
+        out.setdefault(str(r["tech_id"]), {})[r["on_date"]] = {
+            "note": r["note"], "author": r["author"], "updated_at": r["updated_at"]}
+    return out
+
+
 def load_roster_month(conn, user, query):
     """Roster calendar payload for one month. A TECHNICIAN sees only their own
     linked technician; ADMIN/VIEW may pass scope=team or scope=tech:<id>."""
@@ -1914,6 +1982,7 @@ def load_roster_month(conn, user, query):
 
     out = {"month": month, "days": days, "scope": scope,
            "can_edit": user["role"] == "ADMIN", "key": ROSTER_KEY,
+           "can_note_train": user["role"] in ("ADMIN", "TECHNICIAN"),
            "techs": techs}
 
     if scope == "none":
@@ -1929,6 +1998,7 @@ def load_roster_month(conn, user, query):
         for r in rows:
             ent.setdefault(str(r["tech_id"]), {})[r["on_date"]] = r["code"]
         out["entries"] = ent
+        out["train_notes"] = _train_notes(conn, days[0], days[-1])
         out["notes"] = {
             r["on_date"]: {"note": r["note"], "author": r["author"],
                            "updated_at": r["updated_at"]}
@@ -1951,6 +2021,7 @@ def load_roster_month(conn, user, query):
         (tid, days[0], days[-1])).fetchall()
     out["tech"] = dict(trow)
     out["entries"] = {str(tid): {r["on_date"]: r["code"] for r in rows}}
+    out["train_notes"] = _train_notes(conn, days[0], days[-1], tid)
     # holidays: calendar year of the displayed month; sick: rolling 12 months from today
     yr = ("%04d-01-01" % y, "%04d-12-31" % y)
     te = datetime.date.fromisoformat(today())

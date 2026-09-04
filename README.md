@@ -122,13 +122,15 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
     step shows every change as `was → new` before it is written to SQLite. Each save is
     written to a `record_changes` audit log. **Export this table (CSV)** dumps the current
     table as-is. **A cell that is blank in the database stays blank here** — no `—`, no
-    placeholder text. A read-only **Roster notes** tab (Date · Note · Entered by) is also
-    listed here with its own CSV export.
+    placeholder text. Two read-only flat tabs are also listed here, each with its own CSV
+    export: **Roster notes** (Date · Note · Entered by) and **Service start dates**
+    (Turbine · Service · Start date · Completed — every service that has a planned start,
+    kept even after it's completed).
   - *Completions report* — pick a from/to date and download an **.xlsx workbook** with a
     worksheet for **every** asset tab (Service dates, HV, Stat, Retrofits, Blades,
     Components) listing every record whose completion date falls in that window — whether
-    the date was imported from the spreadsheets or entered in the app — plus a Pendings
-    sheet for entries reviewed/completed in the window.
+    the date was imported from the spreadsheets or entered in the app — plus Pendings,
+    Roster notes and Service start dates sheets for the window.
 - **Technician Roster** — a month calendar, visible to everyone. `TECHNICIAN` logins see
   **only their own** calendar (read-only); `VIEW` sees everyone (read-only); `ADMIN` edits.
   ‹ › page months. A single technician → a Mon–Sun calendar with a Manplan-Key dropdown per
@@ -140,7 +142,10 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
   number in the grid highlights everyone **available** that day (blank / `KILG`) in green.
   On the team calendar, any day can carry a free-text **note** (☆ / ★ marker → view / edit /
   delete); notes are logged with date + author and show as a **Roster notes** tab in the
-  Data Explorer (with CSV export and a sheet in the completions report). Admins get **Manage
+  Data Explorer (with CSV export and a sheet in the completions report). A **TRG** (training)
+  day gets its own per-technician training note — click the `TRG` chip/cell in any view
+  (team calendar, grid, or individual); an admin, or the technician on their own day, can
+  edit it, everyone else reads it. Admins get **Manage
   technicians** to add (name + optional login link), archive (calendar kept, leaves
   Notification Request) and restore.
 - **Notification Request (admin)** — pick a **roster date**; the left rail shows **available
@@ -173,7 +178,8 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
     a **Defect / operational issue** card — free text, **admin-editable** (View / technician
     read-only), highlighted when present; seeded once from KGH 2025 column G, then owned
     entirely by the database;
-    a **Next service due** card (the next incomplete service and its planned date — see the
+    a **Next service due** card (the next incomplete service, its planned date, and
+    "Started · &lt;date&gt;" if a start date is on it — see the
     dashboard note above — with a days-away / overdue indicator); and a **Condition
     monitoring (SMP)** box with gearbox / generator / main-bearing state and observations,
     re-synced from `source/KGH_SMP.csv` on every start (states: Normal / Monitoring /
@@ -214,10 +220,12 @@ break-glass account is always kept (override with `$ADMIN_PASSWORD`).
     quantities, service order). While **Reviewed**, *either* an admin or a technician can
     **Add photo / part** — an optional photo plus an optional part number + quantity, each
     stamped with who added it and when; the entry records its last-changed-by/at. A
-    technician completes with a mandatory comment + evidence photo. On **app entry** an
-    admin gets a one-off pop-up if any entries are still awaiting review. The **#/pendings**
-    list (from the dashboard) filters by status and its **Export (CSV)** button exports
-    exactly the current filter.
+    technician completes with a mandatory comment + evidence photo — which plays a short
+    completion chime. On **app entry** an admin gets a one-off pop-up if any entries are
+    still awaiting review, and an **orange dot** stays on the *Site Dashboard* nav item,
+    the *Open pending entries* KPI and the *Submitted* filter chip until the queue is clear.
+    The **#/pendings** list (from the dashboard) filters by status and its **Export (CSV)**
+    button exports exactly the current filter.
     Photos are resized to 4000&nbsp;px / q90 on upload (Pillow) and get a 480&nbsp;px list
     thumbnail; the list shows the thumbnail, clicking opens the full image. Files live in
     `data/uploads/` and are served with a one-year immutable cache. Every photo URL is built
