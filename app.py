@@ -2402,9 +2402,16 @@ def load_notif(conn, date):
     }
 
 
+_MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
 def _notif_ddmmyyyy(date):
+    # Spelled-out month (e.g. "04-Sep-2026") rather than "04/09/2026": a numeric
+    # DD/MM date is ambiguous to Excel/Graph, which can read it back as MM/DD
+    # regardless of the sheet's locale, silently swapping day and month.
     try:
-        return "%s/%s/%s" % (date[8:10], date[5:7], date[0:4])   # DD/MM/YYYY
+        return "%s-%s-%s" % (date[8:10], _MONTH_ABBR[int(date[5:7]) - 1], date[0:4])
     except Exception:
         return date
 
@@ -2575,35 +2582,50 @@ def _outbox_deliver_row(row, method):
     return False, "no delivery method configured"
 
 
+_outbox_lock = threading.Lock()
+
+
 def deliver_outbox(limit=50):
     """Attempt delivery of PENDING / retryable FAILED rows. Safe to call from a
-    worker thread or right after a submit. No-op when no transport is set."""
+    worker thread or right after a submit. No-op when no transport is set.
+
+    Guarded by a lock, with each row committed as it's sent: the immediate
+    best-effort call after a submit and the periodic worker's tick can land at
+    the same time, and without this a second caller could select the same
+    still-uncommitted PENDING rows and send them again — duplicate emails, and
+    duplicate rows in the workbook. If the lock is already held, this call is a
+    safe no-op; whichever rows it would have picked up get caught next tick."""
     method = _outbox_delivery_method()
     if not method:
         return 0, 0
-    conn = get_db()
+    if not _outbox_lock.acquire(blocking=False):
+        return 0, 0
     try:
-        rows = conn.execute(
-            "SELECT * FROM notif_outbox WHERE status IN ('PENDING','FAILED') "
-            "AND attempts < ? ORDER BY id LIMIT ?",
-            (NOTIF_OUTBOX_MAX_ATTEMPTS, limit)).fetchall()
-        sent = failed = 0
-        for row in rows:
-            ok, detail = _outbox_deliver_row(row, method)
-            if ok:
-                conn.execute(
-                    "UPDATE notif_outbox SET status='SENT', sent_at=?, sent_via=?, "
-                    "attempts=attempts+1, last_error=NULL WHERE id=?", (now(), method, row["id"]))
-                sent += 1
-            else:
-                conn.execute(
-                    "UPDATE notif_outbox SET status='FAILED', attempts=attempts+1, "
-                    "last_error=? WHERE id=?", (detail[:500], row["id"]))
-                failed += 1
-        conn.commit()
-        return sent, failed
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM notif_outbox WHERE status IN ('PENDING','FAILED') "
+                "AND attempts < ? ORDER BY id LIMIT ?",
+                (NOTIF_OUTBOX_MAX_ATTEMPTS, limit)).fetchall()
+            sent = failed = 0
+            for row in rows:
+                ok, detail = _outbox_deliver_row(row, method)
+                if ok:
+                    conn.execute(
+                        "UPDATE notif_outbox SET status='SENT', sent_at=?, sent_via=?, "
+                        "attempts=attempts+1, last_error=NULL WHERE id=?", (now(), method, row["id"]))
+                    sent += 1
+                else:
+                    conn.execute(
+                        "UPDATE notif_outbox SET status='FAILED', attempts=attempts+1, "
+                        "last_error=? WHERE id=?", (detail[:500], row["id"]))
+                    failed += 1
+                conn.commit()          # per-row, so a concurrent caller sees fresh state ASAP
+            return sent, failed
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        _outbox_lock.release()
 
 
 def _outbox_worker():
