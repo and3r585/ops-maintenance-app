@@ -226,6 +226,40 @@ CREATE TABLE IF NOT EXISTS roster_train_note (
     PRIMARY KEY (tech_id, on_date)
 );
 
+-- Team Line Up: technicians who regularly work together share a vehicle. The
+-- vehicle is the stable anchor; up to 3 technicians sit on it at a time,
+-- changed by drag-and-drop as pairings shift. Not date-scoped — a standing
+-- arrangement, not a per-day plan. Contractors never appear here (excluded
+-- the same way as roster_tech.is_contractor everywhere else).
+CREATE TABLE IF NOT EXISTS fleet_vehicle (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    reg         TEXT NOT NULL,
+    sort        INTEGER NOT NULL DEFAULT 0,
+    active      INTEGER NOT NULL DEFAULT 1,       -- 0 = archived
+    created_at  TEXT NOT NULL,
+    archived_at TEXT
+);
+-- tech_id is the PK: a technician sits on at most one vehicle at a time, so
+-- reassigning them is a single upsert, no separate "remove from old vehicle"
+-- step needed.
+CREATE TABLE IF NOT EXISTS fleet_vehicle_member (
+    tech_id    INTEGER PRIMARY KEY REFERENCES roster_tech(id),
+    vehicle_id INTEGER NOT NULL REFERENCES fleet_vehicle(id),
+    slot       INTEGER NOT NULL DEFAULT 0
+);
+-- One row per (vehicle, date) with a note and/or an alert — same shape as
+-- roster_note/roster_train_note above. alert=1 drives the orange dot on that
+-- vehicle's reg box; it clears when someone edits the entry and unchecks it.
+CREATE TABLE IF NOT EXISTS fleet_vehicle_day (
+    vehicle_id INTEGER NOT NULL REFERENCES fleet_vehicle(id),
+    on_date    TEXT NOT NULL,
+    note       TEXT,
+    alert      INTEGER NOT NULL DEFAULT 0,
+    author_id  INTEGER REFERENCES users(id),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (vehicle_id, on_date)
+);
+
 -- Work-order history per asset (from the Job Request "SCOTT & STUART 2026" tab).
 CREATE TABLE IF NOT EXISTS asset_history (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -559,6 +593,7 @@ def seed():
         ("dashboard", "Site Dashboard", "TECHNICIAN", 5),
         ("assets", "Asset Information", "TECHNICIAN", 10),
         ("roster", "Technician Roster", "TECHNICIAN", 15),
+        ("lineup", "Team Line Up", "TECHNICIAN", 18),
         ("planning", "Notification Request", "ADMIN", 20),
         ("explorer", "Data Explorer", "ADMIN", 30),
     ]:
@@ -1267,6 +1302,12 @@ class Handler(BaseHTTPRequestHandler):
                 res["submission_id"] = submission_id
                 return 200, res
 
+            if op == "suggest_teams":
+                added = _notif_suggest_teams(conn, date)
+                res = load_notif(conn, date)
+                res["suggested"] = added
+                return 200, res
+
             team_no = int(data.get("team_no") or 0)
             if not (1 <= team_no <= NOTIF_MAX_TEAMS):
                 raise ApiError(400, "team_no must be 1-%d" % NOTIF_MAX_TEAMS)
@@ -1530,6 +1571,92 @@ class Handler(BaseHTTPRequestHandler):
                 conn.execute("UPDATE roster_tech SET active = 1, archived_at = NULL WHERE id = ?",
                              (tid,))
             return 200, {"ok": True}
+
+        # --- Team Line Up (vehicle pairings + calendar) ---
+        if parts == ["lineup"] and method == "GET":
+            self._require(conn, ("ADMIN", "VIEW", "TECHNICIAN"))
+            return 200, _lineup_state(conn)
+
+        if parts == ["lineup"] and method == "POST":
+            self._require(conn, "ADMIN")
+            data = self._json_body()
+            op = data.get("op")
+            if op == "add_vehicle":
+                reg = (data.get("reg") or "").strip()
+                if not reg:
+                    raise ApiError(400, "A registration is required")
+                mx = conn.execute(
+                    "SELECT COALESCE(MAX(sort), 0) m FROM fleet_vehicle").fetchone()["m"]
+                conn.execute("INSERT INTO fleet_vehicle (reg, sort, created_at) VALUES (?,?,?)",
+                             (reg, mx + 1, now()))
+            elif op == "archive_vehicle":
+                vid = data.get("vehicle_id")
+                if not conn.execute("SELECT 1 FROM fleet_vehicle WHERE id = ?", (vid,)).fetchone():
+                    raise ApiError(404, "Vehicle not found")
+                conn.execute("UPDATE fleet_vehicle SET active = 0, archived_at = ? WHERE id = ?",
+                             (now(), vid))
+                conn.execute("DELETE FROM fleet_vehicle_member WHERE vehicle_id = ?", (vid,))
+            elif op == "restore_vehicle":
+                vid = data.get("vehicle_id")
+                if not conn.execute("SELECT 1 FROM fleet_vehicle WHERE id = ?", (vid,)).fetchone():
+                    raise ApiError(404, "Vehicle not found")
+                conn.execute(
+                    "UPDATE fleet_vehicle SET active = 1, archived_at = NULL WHERE id = ?", (vid,))
+            elif op == "assign":
+                tid = data.get("tech_id")
+                vid = data.get("vehicle_id")
+                if not conn.execute(
+                        "SELECT 1 FROM roster_tech WHERE id = ? AND active = 1 AND is_contractor = 0",
+                        (tid,)).fetchone():
+                    raise ApiError(404, "Technician not found")
+                if not conn.execute(
+                        "SELECT 1 FROM fleet_vehicle WHERE id = ? AND active = 1", (vid,)).fetchone():
+                    raise ApiError(404, "Vehicle not found")
+                n = conn.execute(
+                    "SELECT COUNT(*) c FROM fleet_vehicle_member WHERE vehicle_id = ? AND tech_id != ?",
+                    (vid, tid)).fetchone()["c"]
+                if n >= 3:
+                    raise ApiError(409, "A vehicle can hold at most 3 technicians")
+                conn.execute(
+                    "INSERT INTO fleet_vehicle_member (tech_id, vehicle_id, slot) VALUES (?,?,?) "
+                    "ON CONFLICT(tech_id) DO UPDATE SET "
+                    "vehicle_id = excluded.vehicle_id, slot = excluded.slot",
+                    (tid, vid, n))
+            elif op == "unassign":
+                conn.execute("DELETE FROM fleet_vehicle_member WHERE tech_id = ?",
+                             (data.get("tech_id"),))
+            else:
+                raise ApiError(400, "Unknown op")
+            return 200, _lineup_state(conn)
+
+        if parts == ["lineup", "calendar"] and method == "GET":
+            self._require(conn, ("ADMIN", "VIEW", "TECHNICIAN"))
+            return 200, _lineup_calendar(conn, (query.get("month", [""])[0] or "").strip())
+
+        if parts == ["lineup", "day"] and method == "PATCH":
+            user = self._require(conn)
+            if user["role"] not in ("ADMIN", "TECHNICIAN"):
+                raise ApiError(403, "Not permitted")
+            data = self._json_body()
+            vid = data.get("vehicle_id")
+            d = (data.get("date") or "").strip()
+            note = (data.get("note") or "").strip()
+            alert = 1 if data.get("alert") else 0
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", d):
+                raise ApiError(400, "A date is required (YYYY-MM-DD)")
+            if not conn.execute("SELECT 1 FROM fleet_vehicle WHERE id = ?", (vid,)).fetchone():
+                raise ApiError(404, "Vehicle not found")
+            if note or alert:
+                conn.execute(
+                    "INSERT INTO fleet_vehicle_day (vehicle_id, on_date, note, alert, author_id, updated_at) "
+                    "VALUES (?,?,?,?,?,?) ON CONFLICT(vehicle_id, on_date) DO UPDATE SET "
+                    "note = excluded.note, alert = excluded.alert, author_id = excluded.author_id, "
+                    "updated_at = excluded.updated_at",
+                    (vid, d, note or None, alert, user["id"], now()))
+            else:
+                conn.execute(
+                    "DELETE FROM fleet_vehicle_day WHERE vehicle_id = ? AND on_date = ?", (vid, d))
+            return 200, {"ok": True, "vehicle_id": vid, "date": d, "note": note, "alert": bool(alert)}
 
         # --- assets ---
         if parts == ["assets"] and method == "GET":
@@ -2234,6 +2361,68 @@ def load_roster_month(conn, user, query):
     return out
 
 
+# --- Team Line Up (vehicle pairings + calendar) -----------------------------
+
+def _lineup_state(conn):
+    """Every active vehicle with its (up to 3) technicians, plus the rail of
+    unassigned technicians. Contractors are excluded everywhere, same as the
+    Technician Roster."""
+    vehicles = conn.execute(
+        "SELECT * FROM fleet_vehicle WHERE active = 1 ORDER BY sort, id").fetchall()
+    members = conn.execute(
+        "SELECT m.vehicle_id, m.tech_id, t.name AS display_name "
+        "FROM fleet_vehicle_member m JOIN roster_tech t ON t.id = m.tech_id "
+        "WHERE t.active = 1 AND t.is_contractor = 0 ORDER BY m.vehicle_id, m.slot").fetchall()
+    by_vehicle = {}
+    for m in members:
+        by_vehicle.setdefault(m["vehicle_id"], []).append(
+            {"id": m["tech_id"], "display_name": m["display_name"]})
+    assigned_ids = {m["tech_id"] for m in members}
+
+    out_vehicles = []
+    for v in vehicles:
+        has_alert = conn.execute(
+            "SELECT 1 FROM fleet_vehicle_day WHERE vehicle_id = ? AND alert = 1 LIMIT 1",
+            (v["id"],)).fetchone() is not None
+        out_vehicles.append({
+            "id": v["id"], "reg": v["reg"], "has_alert": has_alert,
+            "members": by_vehicle.get(v["id"], []),
+        })
+    rail = [dict(r) for r in conn.execute(
+        "SELECT id, name AS display_name FROM roster_tech "
+        "WHERE active = 1 AND is_contractor = 0 ORDER BY sort, name").fetchall()
+        if r["id"] not in assigned_ids]
+    return {"vehicles": out_vehicles, "rail": rail}
+
+
+def _lineup_calendar(conn, month):
+    """Every active vehicle's fleet_vehicle_day entries for one month — used
+    by both the single-vehicle editor (client filters to one vehicle_id) and
+    Fleet View (uses all of them)."""
+    import calendar
+    month = month if re.match(r"^\d{4}-\d{2}$", month or "") else time.strftime("%Y-%m")
+    y, m = int(month[:4]), int(month[5:7])
+    ndays = calendar.monthrange(y, m)[1]
+    days = ["%04d-%02d-%02d" % (y, m, d) for d in range(1, ndays + 1)]
+
+    vehicles = conn.execute(
+        "SELECT * FROM fleet_vehicle WHERE active = 1 ORDER BY sort, id").fetchall()
+    entries_by_vehicle = {}
+    for r in conn.execute(
+            "SELECT d.*, u.display_name AS author FROM fleet_vehicle_day d "
+            "LEFT JOIN users u ON u.id = d.author_id WHERE d.on_date BETWEEN ? AND ?",
+            (days[0], days[-1])):
+        entries_by_vehicle.setdefault(r["vehicle_id"], {})[r["on_date"]] = {
+            "note": r["note"], "alert": bool(r["alert"]),
+            "author": r["author"], "updated_at": r["updated_at"],
+        }
+    return {
+        "month": month, "days": days,
+        "vehicles": [{"id": v["id"], "reg": v["reg"],
+                      "entries": entries_by_vehicle.get(v["id"], {})} for v in vehicles],
+    }
+
+
 # Notification Request ---------------------------------------------------------
 
 NOTIF_TEAM_SIZE = 4          # technicians per team
@@ -2510,6 +2699,41 @@ def _notif_submit(conn, date, user=None):
     conn.execute("DELETE FROM notif_member WHERE plan_date=?", (date,))
     conn.execute("DELETE FROM notif_request WHERE plan_date=?", (date,))
     return filed, len(ready), sub
+
+
+def _notif_suggest_teams(conn, date):
+    """Add a new team per Team Line Up vehicle grouping that has at least one
+    available, unplaced member — an unavailable teammate is simply left in
+    the rail, never force-added. Existing teams/placements are untouched.
+    Returns the number of teams added."""
+    plan = load_notif(conn, date)
+    available_ids = {t["id"] for t in plan["available"]}
+    placed_ids = {m["id"] for t in plan["teams"] for m in t["members"]}
+    groups = conn.execute(
+        "SELECT vehicle_id, tech_id FROM fleet_vehicle_member ORDER BY vehicle_id, slot"
+    ).fetchall()
+    by_vehicle = {}
+    for g in groups:
+        by_vehicle.setdefault(g["vehicle_id"], []).append(g["tech_id"])
+
+    next_no = max([t["team_no"] for t in plan["teams"]], default=0) + 1
+    added = 0
+    for tech_ids in by_vehicle.values():
+        if next_no > NOTIF_MAX_TEAMS:
+            break
+        avail = [tid for tid in tech_ids if tid in available_ids and tid not in placed_ids]
+        if not avail:
+            continue
+        conn.execute("INSERT INTO notif_request (plan_date, team_no, created_at) VALUES (?,?,?)",
+                     (date, next_no, now()))
+        for slot, tid in enumerate(avail):
+            conn.execute(
+                "INSERT INTO notif_member (plan_date, team_no, tech_id, slot) VALUES (?,?,?,?)",
+                (date, next_no, tid, slot))
+            placed_ids.add(tid)
+        next_no += 1
+        added += 1
+    return added
 
 
 # --- outbox delivery -------------------------------------------------------

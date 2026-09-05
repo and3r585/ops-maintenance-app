@@ -489,7 +489,7 @@ async function logout(silent) {
 /* ================================================================
    Chrome
    ================================================================ */
-const MODULE_ROUTE = { assets: "#/assets", roster: "#/roster", planning: "#/planning", dashboard: "#/dashboard", explorer: "#/explorer" };
+const MODULE_ROUTE = { assets: "#/assets", roster: "#/roster", lineup: "#/lineup", planning: "#/planning", dashboard: "#/dashboard", explorer: "#/explorer" };
 function topbar(active) {
   const alert = State.user && State.user.role === "ADMIN" && State.submittedCount > 0;
   const navItems = State.modules.map((m) =>
@@ -1768,6 +1768,17 @@ async function viewPlanning() {   /* Notification Request */
       ...plan.available.map(t => techChip(t)));
     rail.append(
       h("label", { class: "rail-date" }, "Roster date", dateInput),
+      readOnly ? null : h("button", {
+        class: "btn sm ghost", style: "width:100%;margin-bottom:.6rem",
+        onclick: async () => {
+          try {
+            plan = await api("/notif", { method: "POST", body: { date: planDate, op: "suggest_teams" } });
+            draw();
+            toast(plan.suggested ? "Added " + plan.suggested + " team" + (plan.suggested === 1 ? "" : "s")
+                                  + " from Team Line Up" : "No regular pairings are available to suggest right now");
+          } catch (e) { toast(e.message, true); }
+        },
+      }, "Suggest teams from Team Line Up"),
       h("h3", { class: "rail-head" },
         "Available technicians (" + plan.available.length + ")"
         + (plan.placed_count ? " · " + plan.placed_count + " on teams" : "")),
@@ -2231,6 +2242,318 @@ async function viewRoster() {
   draw();
 }
 
+/* ---------- Team Line Up + Fleet View ---------- */
+async function viewLineup() {
+  const role = State.user.role;
+  const isAdmin = role === "ADMIN";
+  const canEditCalendar = role === "ADMIN" || role === "TECHNICIAN";
+  loading();
+
+  let mode = "lineup";           // "lineup" | "fleet"
+  let fleetLayout = "calendar";  // "calendar" | "grid"
+  let ym = new Date().toISOString().slice(0, 7);
+  let data;   // /lineup: { vehicles, rail }
+  let cal;    // /lineup/calendar: { month, days, vehicles: [{id, reg, entries}] }
+
+  async function loadLineup() { data = await api("/lineup"); }
+  async function loadCalendar() { cal = await api("/lineup/calendar?month=" + ym); }
+  try { await loadLineup(); } catch (e) { return renderError(e); }
+
+  async function mutate(body) {
+    try { data = await api("/lineup", { method: "POST", body }); draw(); }
+    catch (e) { toast(e.message, true); }
+  }
+
+  function monthLabelFor(m) { const [y, mo] = m.split("-").map(Number); return ROSTER_MONTHS[mo - 1] + " " + y; }
+  function monthCellsFor(m) {
+    const [y, mo] = m.split("-").map(Number);
+    const startPad = (new Date(y, mo - 1, 1).getDay() + 6) % 7;      // Monday = 0
+    const dim = new Date(y, mo, 0).getDate();
+    const cells = Array(startPad).fill(null);
+    for (let d = 1; d <= dim; d++)
+      cells.push(y + "-" + String(mo).padStart(2, "0") + "-" + String(d).padStart(2, "0"));
+    while (cells.length % 7) cells.push(null);
+    return cells;
+  }
+  function calShellFor(m, dayContent) {
+    const grid = h("div", { class: "cal-grid" });
+    ROSTER_DOW.forEach(d => grid.append(h("div", { class: "cal-dow" }, d)));
+    for (const iso of monthCellsFor(m)) {
+      if (!iso) { grid.append(h("div", { class: "cal-cell empty" })); continue; }
+      const cell = h("div", { class: "cal-cell" }, h("div", { class: "cal-num" }, +iso.slice(8)));
+      dayContent(cell, iso);
+      grid.append(cell);
+    }
+    return h("div", { class: "cal-scroll" }, grid);
+  }
+  function shiftYm(delta) {
+    const [y, m] = ym.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    ym = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+  }
+
+  /* ---- pointer drag (same physics as Notification Request's board) ---- */
+  function startDrag(e, payload, el) {
+    if (e.button != null && e.button !== 0) return;
+    e.preventDefault();
+    const sx = e.clientX, sy = e.clientY;
+    let ghost = null, zone = null;
+    const move = (ev) => {
+      if (!ghost && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
+      if (!ghost) {
+        el.classList.add("dragging");
+        ghost = el.cloneNode(true); ghost.classList.add("drag-ghost");
+        ghost.style.width = el.offsetWidth + "px";
+        document.body.append(ghost); document.body.style.cursor = "grabbing";
+      }
+      ghost.style.left = (ev.clientX + 8) + "px"; ghost.style.top = (ev.clientY + 8) + "px";
+      ghost.style.display = "none";
+      const under = document.elementFromPoint(ev.clientX, ev.clientY);
+      ghost.style.display = "";
+      const z = under && under.closest("[data-accept]");
+      const ok = z && z.dataset.accept === payload.kind && z.dataset.full !== "1";
+      if (z !== zone) {
+        if (zone) zone.classList.remove("over", "reject");
+        zone = z;
+        if (zone) zone.classList.add(ok ? "over" : "reject");
+      }
+    };
+    const up = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+      try { window.getSelection().removeAllRanges(); } catch (_) {}
+      if (ghost) ghost.remove();
+      el.classList.remove("dragging");
+      if (zone) {
+        const accept = zone.dataset.accept, team = zone.dataset.team;
+        const full = zone.dataset.full === "1";
+        zone.classList.remove("over", "reject");
+        if (accept === payload.kind && !full) {
+          if (team === "rail") mutate({ op: "unassign", tech_id: payload.id });
+          else mutate({ op: "assign", tech_id: payload.id, vehicle_id: +team });
+        }
+      }
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", up);
+  }
+
+  function techChip(t, fromVehicle) {
+    const chip = h("div", { class: "tech-chip" + (fromVehicle ? " placed" : "") },
+      h("span", { class: "tc-name" }, t.display_name),
+      (fromVehicle && isAdmin)
+        ? h("button", { class: "chip-x", title: "Remove", onclick: () => mutate({ op: "unassign", tech_id: t.id }) }, "×")
+        : null);
+    if (isAdmin) chip.addEventListener("pointerdown", (e) => startDrag(e, { kind: "tech", id: t.id, fromVehicle }, chip));
+    return chip;
+  }
+
+  /* ---- vehicle calendar (opened by clicking a reg) ---- */
+  async function vehicleCalendarModal(vehicleId, reg) {
+    let vym = ym;
+    let vcal;
+    async function loadV() { vcal = await api("/lineup/calendar?month=" + vym); }
+    try { await loadV(); } catch (e) { return toast(e.message, true); }
+
+    const body = h("div", {});
+    const backdrop = h("div", { class: "modal-backdrop" });
+    const close = () => { backdrop.remove(); loadLineup().then(draw); };
+    backdrop.append(h("div", { class: "modal modal-lg" },
+      h("div", { class: "btn-row", style: "justify-content:space-between;align-items:center" },
+        h("h3", {}, "Vehicle calendar — " + reg),
+        h("button", { class: "btn ghost sm", onclick: close }, "Close")),
+      body));
+    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+    document.body.append(backdrop);
+
+    function entriesFor() {
+      const v = (vcal.vehicles || []).find((x) => x.id === vehicleId);
+      return v ? v.entries : {};
+    }
+
+    async function dayEditor(iso) {
+      const ent = entriesFor()[iso];
+      const ta = h("textarea", { rows: "4", placeholder: "Note for " + iso }, ent ? (ent.note || "") : "");
+      const alertBox = h("input", { type: "checkbox" });
+      alertBox.checked = !!(ent && ent.alert);
+      ta.disabled = !canEditCalendar; alertBox.disabled = !canEditCalendar;
+      const dback = h("div", { class: "modal-backdrop" });
+      const dclose = () => dback.remove();
+      const save = async (text, alert) => {
+        try {
+          await api("/lineup/day", { method: "PATCH", body: { vehicle_id: vehicleId, date: iso, note: text, alert } });
+          dclose(); await loadV(); drawV();
+          toast(text || alert ? "Saved" : "Cleared");
+        } catch (e) { toast(e.message, true); }
+      };
+      const actions = [h("button", { class: "btn ghost", onclick: dclose }, canEditCalendar ? "Cancel" : "Close")];
+      if (canEditCalendar) {
+        if (ent) actions.push(h("button", { class: "btn ghost danger", onclick: () => save("", false) }, "Delete"));
+        actions.push(h("button", { class: "btn primary", onclick: () => save(ta.value.trim(), alertBox.checked) }, "Save"));
+      }
+      dback.append(h("div", { class: "modal" },
+        h("h3", {}, "Vehicle note — " + fmtDate(iso)),
+        ent ? h("p", { class: "hint" }, "By " + (ent.author || "?")
+          + (ent.updated_at ? " · " + fmtDate(ent.updated_at.slice(0, 10)) : "")) : null,
+        ta,
+        h("label", { class: "notif-lbl", style: "flex-direction:row;align-items:center;gap:.4rem;margin-top:.6rem" },
+          alertBox, "Raise alert"),
+        h("div", { class: "btn-row", style: "justify-content:flex-end;margin-top:1rem" }, ...actions)));
+      dback.addEventListener("click", (e) => { if (e.target === dback) dclose(); });
+      document.body.append(dback);
+      if (canEditCalendar) ta.focus();
+    }
+
+    function drawV() {
+      clear(body);
+      const head = h("div", { class: "cal-head" },
+        h("button", { class: "cal-nav", onclick: async () => { shiftV(-1); await loadV(); drawV(); } }, "‹"),
+        h("div", { class: "cal-title" }, monthLabelFor(vym)),
+        h("button", { class: "cal-nav", onclick: async () => { shiftV(1); await loadV(); drawV(); } }, "›"));
+      function shiftV(delta) {
+        const [y, m] = vym.split("-").map(Number);
+        const d = new Date(y, m - 1 + delta, 1);
+        vym = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+      }
+      body.append(head, calShellFor(vym, (cell, iso) => {
+        const ent = entriesFor()[iso];
+        const btn = h("button", {
+          class: "cal-note" + (ent ? " has" : "") + (ent && ent.alert ? " alert" : ""),
+          title: ent ? (ent.note || "") + (ent.alert ? " (alert)" : "") : "Add a note",
+          onclick: (e) => { e.stopPropagation(); dayEditor(iso); },
+        }, ent ? (ent.alert ? "⚠" : "★") : "☆");
+        cell.querySelector(".cal-num").append(btn);
+      }));
+    }
+    drawV();
+  }
+
+  function vehicleCard(v) {
+    const full = v.members.length >= 3;
+    const card = h("div", { class: "notif-team" });
+    const head = h("div", { class: "notif-team-head" },
+      h("button", {
+        class: "veh-reg" + (v.has_alert ? " has-alert" : ""),
+        onclick: () => vehicleCalendarModal(v.id, v.reg),
+      }, v.reg));
+    if (isAdmin) head.append(h("button", {
+      class: "link-btn danger",
+      onclick: () => { if (confirm("Archive vehicle " + v.reg + "? Its calendar history is kept.")) mutate({ op: "archive_vehicle", vehicle_id: v.id }); },
+    }, "Archive"));
+    card.append(head);
+
+    const memZone = h("div", { class: "notif-members dropzone2", "data-accept": "tech", "data-team": String(v.id), "data-full": full ? "1" : "0" });
+    v.members.forEach((m) => memZone.append(techChip(m, v.id)));
+    if (isAdmin && !full) memZone.append(h("span", { class: "slot-hint" },
+      v.members.length ? "Drop another technician" : "Drop up to 3 technicians here"));
+    card.append(h("label", { class: "notif-lbl" }, "Technicians (" + v.members.length + "/3)"), memZone);
+    return card;
+  }
+
+  function addVehicleCard() {
+    const input = h("input", { type: "text", placeholder: "Vehicle registration" });
+    const btn = h("button", { class: "btn sm primary" }, "Add vehicle");
+    btn.onclick = async () => {
+      if (!input.value.trim()) return toast("Enter a registration", true);
+      await mutate({ op: "add_vehicle", reg: input.value.trim() });
+    };
+    return h("div", { class: "notif-team" },
+      h("div", { class: "notif-team-head" }, h("h3", {}, "+ Add vehicle")),
+      h("div", { class: "notif-fields" },
+        h("label", { class: "notif-lbl wide" }, "Registration", input), btn));
+  }
+
+  /* ---- Fleet View ---- */
+  function fleetCalendar() {
+    return h("div", { class: "card" }, h("h3", {}, "Fleet — " + monthLabelFor(ym)),
+      calShellFor(ym, (cell, iso) => {
+        const list = h("div", { class: "cal-team" });
+        for (const v of cal.vehicles) {
+          const ent = v.entries[iso];
+          if (!ent) continue;
+          list.append(h("div", {
+            class: "cal-team-row", style: "cursor:pointer",
+            onclick: () => vehicleCalendarModal(v.id, v.reg),
+          }, h("span", { class: "ct-name" }, v.reg),
+             h("span", { class: "fleet-badge" + (ent.alert ? " alert" : "") }, ent.alert ? "⚠ alert" : "note")));
+        }
+        if (list.children.length) cell.append(list);
+      }));
+  }
+  function fleetGrid() {
+    const cells = monthCellsFor(ym).filter(Boolean);
+    const hr = h("tr", {}, h("th", { class: "rm-name" }, "Vehicle"));
+    cells.forEach((iso) => hr.append(h("th", { class: "cal-day-th" }, +iso.slice(8))));
+    const tb = h("tbody", {});
+    for (const v of cal.vehicles) {
+      const tr = h("tr", {}, h("td", {
+        class: "rm-name", style: "cursor:pointer", onclick: () => vehicleCalendarModal(v.id, v.reg),
+      }, v.reg));
+      cells.forEach((iso) => {
+        const ent = v.entries[iso];
+        tr.append(h("td", {
+          class: ent ? (ent.alert ? "fleet-alert" : "fleet-note") : "",
+          style: "cursor:pointer", title: ent ? (ent.note || "") : "",
+          onclick: () => vehicleCalendarModal(v.id, v.reg),
+        }, ent ? (ent.alert ? "⚠" : "•") : ""));
+      });
+      tb.append(tr);
+    }
+    return h("div", { class: "card" }, h("h3", {}, "Fleet grid — " + monthLabelFor(ym)),
+      h("div", { class: "roster-scroll" }, h("table", { class: "roster-matrix" }, h("thead", {}, hr), tb)));
+  }
+
+  const wrap = h("div", {});
+  function draw() {
+    const keepY = window.scrollY;
+    clear(wrap);
+    const head = h("div", { class: "cal-head" },
+      h("div", { class: "cal-layout" },
+        h("button", { class: mode === "lineup" ? "active" : "", onclick: () => { mode = "lineup"; draw(); } }, "Line Up"),
+        h("button", {
+          class: mode === "fleet" ? "active" : "",
+          onclick: async () => { mode = "fleet"; await loadCalendar(); draw(); },
+        }, "Fleet View")));
+    if (mode === "fleet") {
+      head.append(
+        h("button", { class: "cal-nav", onclick: async () => { shiftYm(-1); await loadCalendar(); draw(); } }, "‹"),
+        h("div", { class: "cal-title" }, monthLabelFor(ym)),
+        h("button", { class: "cal-nav", onclick: async () => { shiftYm(1); await loadCalendar(); draw(); } }, "›"),
+        h("div", { class: "cal-layout" },
+          h("button", { class: fleetLayout === "calendar" ? "active" : "", onclick: () => { fleetLayout = "calendar"; draw(); } }, "Calendar"),
+          h("button", { class: fleetLayout === "grid" ? "active" : "", onclick: () => { fleetLayout = "grid"; draw(); } }, "Grid")));
+    }
+    wrap.append(head);
+
+    if (mode === "fleet") {
+      wrap.append(fleetLayout === "grid" ? fleetGrid() : fleetCalendar());
+      if (window.scrollY !== keepY) window.scrollTo(0, keepY);
+      return;
+    }
+
+    const rail = h("div", { class: "plan-rail" },
+      h("h3", { class: "rail-head" }, "Available technicians (" + data.rail.length + ")"),
+      h("div", { class: "chip-wrap", "data-accept": "tech", "data-team": "rail" },
+        data.rail.length ? null : h("span", { class: "slot-hint" }, "Everyone is on a vehicle"),
+        ...data.rail.map((t) => techChip(t))));
+    const board = h("div", { class: "notif-board" });
+    data.vehicles.forEach((v) => board.append(vehicleCard(v)));
+    if (isAdmin) board.append(addVehicleCard());
+    else if (!data.vehicles.length) board.append(h("div", { class: "empty-state" }, "No vehicles set up yet."));
+    wrap.append(h("div", { class: "plan-layout" }, rail, h("div", { class: "notif-wrap" }, board)));
+    if (window.scrollY !== keepY) window.scrollTo(0, keepY);
+  }
+
+  root.replaceChildren(shell("lineup",
+    h("div", { class: "page-head" }, h("h1", {}, "Team Line Up"),
+      h("p", { class: "sub" }, isAdmin
+        ? "Drag technicians onto a vehicle (up to 3) to record who regularly works together. Click a registration to open its calendar."
+        : "Who's paired with who and which vehicle they share. Click a registration to add a note or see one.")),
+    wrap));
+  draw();
+}
+
 /* ================================================================
    Router
    ================================================================ */
@@ -2290,6 +2613,7 @@ async function render() {
   switch (parts[0]) {
     case "assets": return viewAssets();
     case "roster": return viewRoster();
+    case "lineup": return viewLineup();
     case "planning": return viewPlanning();
     case "dashboard": return viewDashboard();
     case "pendings": return viewPendingsList();

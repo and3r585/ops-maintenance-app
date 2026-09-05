@@ -515,6 +515,23 @@ textarea { resize: vertical; min-height: 90px; }
 .outbox-badge.skip  { color: var(--text-soft); background: var(--surface-2); }
 .outbox-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
 
+/* ---- Team Line Up / Fleet View ---- */
+.veh-reg {
+  font-family: var(--font-mono, monospace); font-weight: 700; letter-spacing: .04em;
+  background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+  padding: .3rem .7rem; cursor: pointer; color: var(--text); font-size: .9rem;
+}
+.veh-reg:hover { border-color: var(--accent); color: var(--accent); }
+.modal.modal-lg { max-width: 760px; }
+.cal-note.alert { color: var(--danger); }
+.fleet-badge {
+  font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+  border-radius: 999px; padding: .1rem .5rem; background: var(--surface-2); color: var(--text-soft);
+}
+.fleet-badge.alert { color: var(--danger); background: rgba(191,91,91,.12); }
+.roster-matrix td.fleet-note { color: var(--accent); font-weight: 700; text-align: center; }
+.roster-matrix td.fleet-alert { color: var(--danger); font-weight: 700; text-align: center; background: rgba(191,91,91,.1); }
+
 /* ---- Technician Roster ---- */
 .cal-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: 1rem; }
 .cal-nav {
@@ -624,6 +641,7 @@ button.rcode.trg-note.has::after {
 .topbar nav a.has-alert::after { top: 1px; right: -1px; }
 .filter-chip.has-alert::after { top: -3px; right: -3px; }
 .card.kpi.has-alert::after { top: 12px; right: 12px; width: 9px; height: 9px; }
+.veh-reg.has-alert::after { top: -3px; right: -3px; }
 
 /* grid view: click a day header to flag who's UNAVAILABLE that day in red */
 .roster-matrix .cal-day-th { cursor: pointer; user-select: none; }

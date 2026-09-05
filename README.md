@@ -154,6 +154,20 @@ appear in **Notification Request** — in their own box between *Available techn
   edit it, everyone else reads it. Admins get **Manage
   technicians** to add (name + optional login link), archive (calendar kept, leaves
   Notification Request) and restore.
+- **Team Line Up** — a standing record of which technicians regularly work together and
+  share a vehicle, visible to everyone (`ADMIN`/`VIEW`/`TECHNICIAN`; contractors are
+  excluded entirely, same as the Technician Roster). **Line Up**: drag up to 3 technicians
+  (`ADMIN` only) onto a vehicle card; a technician sits on at most one vehicle at a time —
+  dragging them onto a new one moves them, it doesn't duplicate. `ADMIN` adds/archives
+  vehicles (a managed list, like Manage technicians). Click a vehicle's registration to
+  open its **calendar** — any day can carry a free-text note and/or an alert; both `ADMIN`
+  and `TECHNICIAN` can add or edit these (`VIEW` is read-only), and any unreviewed alert
+  shows as an orange dot on the registration itself until the entry is edited. **Fleet
+  View** (a toggle on the same screen) shows every vehicle's calendar month-by-month, as a
+  day-by-day list or a vehicle × day **grid**, either way flagging alert days. On
+  **Notification Request**, admins get a **Suggest teams** button that adds a new team per
+  vehicle grouping that has at least one available, unplaced technician that day —
+  anyone unavailable is simply left in the rail, never force-added.
 - **Notification Request (admin)** — pick a **roster date**; the left rail shows **available
   technicians** as draggable chips, straight from the roster: available only on a **blank or
   `KILG`** day, every other code greyed with the code as the reason. A **Contractors** box
