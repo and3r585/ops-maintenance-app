@@ -158,8 +158,10 @@ appear in **Notification Request** — in their own box between *Available techn
   share a vehicle, visible to everyone (`ADMIN`/`VIEW`/`TECHNICIAN`; contractors are
   excluded entirely, same as the Technician Roster). **Line Up**: drag up to 3 technicians
   (`ADMIN` only) onto a vehicle card; a technician sits on at most one vehicle at a time —
-  dragging them onto a new one moves them, it doesn't duplicate. `ADMIN` adds/archives
-  vehicles (a managed list, like Manage technicians). Click a vehicle's registration to
+  dragging them onto a new one moves them, it doesn't duplicate. Each vehicle is one compact
+  row — technicians on the left, registration on the right. `ADMIN` adds/archives vehicles
+  via a **Manage vehicles** button (top right of the page, same pattern as Manage
+  technicians), rather than per-row controls. Click a vehicle's registration to
   open its **calendar** — any day can carry a free-text note and/or an alert; both `ADMIN`
   and `TECHNICIAN` can add or edit these (`VIEW` is read-only), and any unreviewed alert
   shows as an orange dot on the registration itself until the entry is edited. **Fleet

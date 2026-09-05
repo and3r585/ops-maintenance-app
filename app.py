@@ -1577,6 +1577,15 @@ class Handler(BaseHTTPRequestHandler):
             self._require(conn, ("ADMIN", "VIEW", "TECHNICIAN"))
             return 200, _lineup_state(conn)
 
+        if parts == ["lineup", "vehicles"] and method == "GET":
+            self._require(conn, "ADMIN")
+            archived = query.get("archived", ["0"])[0] == "1"
+            sql = "SELECT id, reg, active, archived_at FROM fleet_vehicle "
+            if not archived:
+                sql += "WHERE active = 1 "
+            sql += "ORDER BY active DESC, sort, id"
+            return 200, {"vehicles": [dict(r) for r in conn.execute(sql)]}
+
         if parts == ["lineup"] and method == "POST":
             self._require(conn, "ADMIN")
             data = self._json_body()

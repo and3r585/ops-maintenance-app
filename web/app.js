@@ -1769,7 +1769,7 @@ async function viewPlanning() {   /* Notification Request */
     rail.append(
       h("label", { class: "rail-date" }, "Roster date", dateInput),
       readOnly ? null : h("button", {
-        class: "btn sm ghost", style: "width:100%;margin-bottom:.6rem",
+        class: "btn sm suggest-teams", style: "width:100%;margin-bottom:.6rem",
         onclick: async () => {
           try {
             plan = await api("/notif", { method: "POST", body: { date: planDate, op: "suggest_teams" } });
@@ -1778,7 +1778,7 @@ async function viewPlanning() {   /* Notification Request */
                                   + " from Team Line Up" : "No regular pairings are available to suggest right now");
           } catch (e) { toast(e.message, true); }
         },
-      }, "Suggest teams from Team Line Up"),
+      }, "Suggest Teams"),
       h("h3", { class: "rail-head" },
         "Available technicians (" + plan.available.length + ")"
         + (plan.placed_count ? " · " + plan.placed_count + " on teams" : "")),
@@ -2431,37 +2431,68 @@ async function viewLineup() {
 
   function vehicleCard(v) {
     const full = v.members.length >= 3;
-    const card = h("div", { class: "notif-team" });
-    const head = h("div", { class: "notif-team-head" },
-      h("button", {
-        class: "veh-reg" + (v.has_alert ? " has-alert" : ""),
-        onclick: () => vehicleCalendarModal(v.id, v.reg),
-      }, v.reg));
-    if (isAdmin) head.append(h("button", {
-      class: "link-btn danger",
-      onclick: () => { if (confirm("Archive vehicle " + v.reg + "? Its calendar history is kept.")) mutate({ op: "archive_vehicle", vehicle_id: v.id }); },
-    }, "Archive"));
-    card.append(head);
-
-    const memZone = h("div", { class: "notif-members dropzone2", "data-accept": "tech", "data-team": String(v.id), "data-full": full ? "1" : "0" });
+    const memZone = h("div", {
+      class: "notif-members dropzone2 lineup-members",
+      "data-accept": "tech", "data-team": String(v.id), "data-full": full ? "1" : "0",
+    });
     v.members.forEach((m) => memZone.append(techChip(m, v.id)));
     if (isAdmin && !full) memZone.append(h("span", { class: "slot-hint" },
-      v.members.length ? "Drop another technician" : "Drop up to 3 technicians here"));
-    card.append(h("label", { class: "notif-lbl" }, "Technicians (" + v.members.length + "/3)"), memZone);
-    return card;
+      v.members.length ? "Drop another" : "Drop up to 3 technicians"));
+    const reg = h("button", {
+      class: "veh-reg" + (v.has_alert ? " has-alert" : ""),
+      onclick: () => vehicleCalendarModal(v.id, v.reg),
+    }, v.reg);
+    return h("div", { class: "notif-team lineup-vehicle" }, memZone, reg);
   }
 
-  function addVehicleCard() {
-    const input = h("input", { type: "text", placeholder: "Vehicle registration" });
-    const btn = h("button", { class: "btn sm primary" }, "Add vehicle");
-    btn.onclick = async () => {
-      if (!input.value.trim()) return toast("Enter a registration", true);
-      await mutate({ op: "add_vehicle", reg: input.value.trim() });
-    };
-    return h("div", { class: "notif-team" },
-      h("div", { class: "notif-team-head" }, h("h3", {}, "+ Add vehicle")),
-      h("div", { class: "notif-fields" },
-        h("label", { class: "notif-lbl wide" }, "Registration", input), btn));
+  async function manageVehicles() {
+    let list;
+    try { list = await api("/lineup/vehicles?archived=1"); } catch (e) { return toast(e.message, true); }
+    const body = h("div", {});
+    const backdrop = h("div", { class: "modal-backdrop" },
+      h("div", { class: "modal" }, h("h3", {}, "Manage vehicles"), body,
+        h("div", { class: "btn-row", style: "margin-top:1rem" },
+          h("button", { class: "btn", onclick: () => backdrop.remove() }, "Close"))));
+    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) backdrop.remove(); });
+    document.body.append(backdrop);
+
+    async function refresh() { list = await api("/lineup/vehicles?archived=1"); await loadLineup(); drawManage(); draw(); }
+    function drawManage() {
+      clear(body);
+      const regIn = h("input", { type: "text", placeholder: "Vehicle registration" });
+      body.append(h("div", { class: "roster-add" }, regIn,
+        h("button", { class: "btn primary sm", onclick: async () => {
+          if (!regIn.value.trim()) return toast("Enter a registration", true);
+          try {
+            await api("/lineup", { method: "POST", body: { op: "add_vehicle", reg: regIn.value.trim() } });
+            toast(regIn.value.trim() + " added"); await refresh();
+          } catch (e) { toast(e.message, true); }
+        } }, "Add")));
+
+      const active = list.vehicles.filter((v) => v.active), arch = list.vehicles.filter((v) => !v.active);
+      body.append(h("h4", {}, "Active (" + active.length + ")"));
+      for (const v of active) body.append(h("div", { class: "roster-manage-row" },
+        h("span", {}, v.reg),
+        h("button", { class: "link-btn danger", onclick: async () => {
+          if (!confirm("Archive vehicle " + v.reg + "? Its calendar history is kept.")) return;
+          try {
+            await api("/lineup", { method: "POST", body: { op: "archive_vehicle", vehicle_id: v.id } });
+            await refresh();
+          } catch (e) { toast(e.message, true); }
+        } }, "Archive")));
+      if (arch.length) {
+        body.append(h("h4", {}, "Archived (" + arch.length + ")"));
+        for (const v of arch) body.append(h("div", { class: "roster-manage-row muted" },
+          h("span", {}, v.reg),
+          h("button", { class: "link-btn", onclick: async () => {
+            try {
+              await api("/lineup", { method: "POST", body: { op: "restore_vehicle", vehicle_id: v.id } });
+              await refresh();
+            } catch (e) { toast(e.message, true); }
+          } }, "Restore")));
+      }
+    }
+    drawManage();
   }
 
   /* ---- Fleet View ---- */
@@ -2524,6 +2555,9 @@ async function viewLineup() {
           h("button", { class: fleetLayout === "calendar" ? "active" : "", onclick: () => { fleetLayout = "calendar"; draw(); } }, "Calendar"),
           h("button", { class: fleetLayout === "grid" ? "active" : "", onclick: () => { fleetLayout = "grid"; draw(); } }, "Grid")));
     }
+    if (isAdmin) head.append(h("button", {
+      class: "btn sm ghost", style: "margin-left:auto", onclick: manageVehicles,
+    }, "Manage vehicles"));
     wrap.append(head);
 
     if (mode === "fleet") {
@@ -2539,8 +2573,8 @@ async function viewLineup() {
         ...data.rail.map((t) => techChip(t))));
     const board = h("div", { class: "notif-board" });
     data.vehicles.forEach((v) => board.append(vehicleCard(v)));
-    if (isAdmin) board.append(addVehicleCard());
-    else if (!data.vehicles.length) board.append(h("div", { class: "empty-state" }, "No vehicles set up yet."));
+    if (!data.vehicles.length) board.append(h("div", { class: "empty-state" },
+      isAdmin ? "No vehicles yet — add one from Manage vehicles." : "No vehicles set up yet."));
     wrap.append(h("div", { class: "plan-layout" }, rail, h("div", { class: "notif-wrap" }, board)));
     if (window.scrollY !== keepY) window.scrollTo(0, keepY);
   }
